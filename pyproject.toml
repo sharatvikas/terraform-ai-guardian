@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "terraform-ai-guardian"
+version = "0.1.0"
+description = "AI-powered Terraform plan reviewer for GitHub Actions"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = [
+    "anthropic>=0.30.0",
+    "httpx>=0.27.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.4.0",
+    "mypy>=1.10.0",
+]
+
+[project.scripts]
+guardian = "guardian.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/guardian"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"

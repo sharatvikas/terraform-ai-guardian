@@ -1,0 +1,67 @@
+name: 'Terraform AI Guardian'
+description: 'AI-powered Terraform plan reviewer — flags security risks, blast radius, and cost implications before merge'
+author: 'sharatvikas'
+
+branding:
+  icon: 'shield'
+  color: 'orange'
+
+inputs:
+  plan-file:
+    description: 'Path to terraform show -json output file'
+    required: true
+    default: 'plan.json'
+
+  anthropic-api-key:
+    description: 'Anthropic API key for Claude analysis'
+    required: true
+
+  github-token:
+    description: 'GitHub token for posting PR comments'
+    required: true
+    default: ${{ github.token }}
+
+  fail-on-risk:
+    description: 'Minimum risk level that causes the action to fail (CRITICAL, HIGH, MEDIUM, LOW)'
+    required: false
+    default: 'CRITICAL'
+
+  standards-file:
+    description: 'Path to org standards YAML file (optional)'
+    required: false
+    default: '.guardian/standards.yaml'
+
+  max-tokens:
+    description: 'Maximum tokens for Claude analysis (cost control)'
+    required: false
+    default: '4096'
+
+  post-comment:
+    description: 'Post analysis as PR comment (true/false)'
+    required: false
+    default: 'true'
+
+outputs:
+  risk-level:
+    description: 'Detected risk level: CRITICAL, HIGH, MEDIUM, LOW, or NONE'
+  critical-count:
+    description: 'Number of critical issues found'
+  warning-count:
+    description: 'Number of warnings found'
+  report-url:
+    description: 'URL to the full analysis report'
+
+runs:
+  using: 'docker'
+  image: 'Dockerfile'
+  env:
+    ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+    GITHUB_TOKEN: ${{ inputs.github-token }}
+    PLAN_FILE: ${{ inputs.plan-file }}
+    FAIL_ON_RISK: ${{ inputs.fail-on-risk }}
+    STANDARDS_FILE: ${{ inputs.standards-file }}
+    MAX_TOKENS: ${{ inputs.max-tokens }}
+    POST_COMMENT: ${{ inputs.post-comment }}
+    GITHUB_REPOSITORY: ${{ github.repository }}
+    GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
+    GITHUB_SHA: ${{ github.sha }}
