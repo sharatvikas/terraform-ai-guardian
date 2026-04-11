@@ -1,0 +1,89 @@
+name: Terraform AI Guardian Example
+
+on:
+  pull_request:
+    paths:
+      - "**.tf"
+      - "**.tfvars"
+
+permissions:
+  contents: read
+  pull-requests: write  # Required for posting PR comments
+
+jobs:
+  terraform-plan:
+    name: Terraform Plan
+    runs-on: ubuntu-latest
+    outputs:
+      plan-file: ${{ steps.plan.outputs.plan-file }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.7.0"
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: us-east-1
+          role-to-assume: ${{ secrets.AWS_PLAN_ROLE_ARN }}
+
+      - name: Terraform Init
+        run: terraform init
+        working-directory: terraform/envs/production
+
+      - name: Terraform Plan
+        id: plan
+        run: |
+          terraform plan -out=tfplan.binary
+          terraform show -json tfplan.binary > tfplan.json
+          echo "plan-file=tfplan.json" >> "$GITHUB_OUTPUT"
+        working-directory: terraform/envs/production
+
+      - name: Upload Plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          path: terraform/envs/production/tfplan.json
+          retention-days: 1
+
+  ai-guardian:
+    name: AI Security Analysis
+    runs-on: ubuntu-latest
+    needs: terraform-plan
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Plan
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan
+
+      - name: Run Terraform AI Guardian
+        id: guardian
+        uses: sharatvikas/terraform-ai-guardian@v0.1.0
+        with:
+          plan-file: tfplan.json
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fail-on-risk: HIGH        # Fail CI if risk is HIGH or CRITICAL
+          standards-file: standards.yaml  # Org-specific standards
+
+      - name: Log Risk Summary
+        run: |
+          echo "Overall Risk: ${{ steps.guardian.outputs.risk-level }}"
+          echo "Critical Findings: ${{ steps.guardian.outputs.critical-count }}"
+          echo "Warning Findings: ${{ steps.guardian.outputs.warning-count }}"
+
+      # Optional: send to Slack when critical findings are detected
+      - name: Notify Slack on Critical Risk
+        if: steps.guardian.outputs.risk-level == 'CRITICAL'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          curl -s -X POST "$SLACK_WEBHOOK_URL" \
+            -H 'Content-type: application/json' \
+            --data '{
+              "text": ":red_circle: *CRITICAL Terraform risk detected* in PR #${{ github.event.number }}\nRepository: ${{ github.repository }}\nBranch: ${{ github.head_ref }}"
+            }'
