@@ -21,10 +21,11 @@ _COMMENT_HEADER = "<!-- terraform-ai-guardian -->"
 
 
 def build_pr_comment(
-    plan: TerraformPlan,
+    overall_risk: RiskLevel,
     findings: list[Finding],
     ai_analysis: str,
-    overall_risk: RiskLevel,
+    plan_file: str,
+    cost_summary: str = "",
 ) -> str:
     emoji = _RISK_EMOJI[overall_risk]
     criticals = [f for f in findings if f.risk_level == RiskLevel.CRITICAL]
@@ -33,9 +34,9 @@ def build_pr_comment(
 
     lines = [
         _COMMENT_HEADER,
-        f"## {emoji} Terraform AI Guardian — Risk: **{overall_risk}**",
+        f"## {emoji} Terraform AI Guardian — Risk: **{overall_risk.name}**",
         "",
-        f"**Plan:** {plan.summary()}  |  "
+        f"**Plan file:** `{plan_file}`  |  "
         f"**Issues:** {len(criticals)} critical, {len(highs)} high, {len(mediums)} medium",
         "",
         "---",
@@ -58,6 +59,10 @@ def build_pr_comment(
 
     if not findings:
         lines.append("\n### ✅ No automated rule violations found\n")
+
+    if cost_summary:
+        lines.append("")
+        lines.append(cost_summary)
 
     if ai_analysis:
         lines.append("\n### 🤖 AI Deep Analysis\n")
