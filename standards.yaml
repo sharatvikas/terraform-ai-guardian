@@ -1,0 +1,155 @@
+version: "1"
+description: >
+  Sovrn Terraform Standards — enforced on every PR via terraform-ai-guardian.
+  Violations block merges unless overridden by a platform engineer.
+
+standards:
+  # ── Tagging Requirements ────────────────────────────────────────────────────
+  - id: TAG-001
+    description: All resources must have an Environment tag
+    severity: HIGH
+    resource_types: ["*"]
+    message: "{resource_address} is missing required tag: Environment"
+    conditions:
+      - type: required
+        field: tags.Environment
+        remediation: |
+          Add to your resource block:
+            tags = {
+              Environment = "production"  # or staging, development
+            }
+
+  - id: TAG-002
+    description: All resources must have a Team tag for cost allocation
+    severity: HIGH
+    resource_types: ["*"]
+    message: "{resource_address} is missing required tag: Team"
+    conditions:
+      - type: required
+        field: tags.Team
+        remediation: |
+          Add tags.Team matching your Slack channel name (e.g. "platform", "data", "core-api")
+
+  - id: TAG-003
+    description: Environment tag must be a known value
+    severity: MEDIUM
+    resource_types: ["*"]
+    message: "{resource_address} has an invalid Environment tag value"
+    conditions:
+      - type: in
+        field: tags.Environment
+        values: ["production", "staging", "development", "sandbox"]
+        remediation: "Use one of: production, staging, development, sandbox"
+
+  # ── Compute ─────────────────────────────────────────────────────────────────
+  - id: EC2-001
+    description: EC2 instances must use IMDSv2
+    severity: HIGH
+    resource_types: ["aws_instance"]
+    message: "{resource_address} must enforce IMDSv2 (metadata_options.http_tokens = required)"
+    conditions:
+      - type: equals
+        field: metadata_options.http_tokens
+        value: required
+        remediation: |
+          Add to your aws_instance:
+            metadata_options {
+              http_tokens = "required"
+            }
+
+  - id: EC2-002
+    description: EBS root volumes must be encrypted
+    severity: CRITICAL
+    resource_types: ["aws_instance"]
+    message: "{resource_address} has unencrypted root EBS volume"
+    conditions:
+      - type: equals
+        field: root_block_device.encrypted
+        value: true
+        remediation: |
+          Add to your aws_instance root_block_device:
+            root_block_device {
+              encrypted = true
+            }
+
+  # ── Storage ─────────────────────────────────────────────────────────────────
+  - id: S3-001
+    description: S3 buckets must have versioning enabled in production
+    severity: HIGH
+    resource_types: ["aws_s3_bucket"]
+    message: "{resource_address} must have versioning enabled"
+    conditions:
+      - type: required
+        field: versioning
+        remediation: |
+          Add:
+            versioning {
+              enabled = true
+            }
+
+  - id: S3-002
+    description: S3 buckets must block all public access
+    severity: CRITICAL
+    resource_types: ["aws_s3_bucket_public_access_block"]
+    message: "{resource_address} must block all public S3 access"
+    conditions:
+      - type: equals
+        field: block_public_acls
+        value: true
+      - type: equals
+        field: block_public_policy
+        value: true
+      - type: equals
+        field: ignore_public_acls
+        value: true
+      - type: equals
+        field: restrict_public_buckets
+        value: true
+
+  # ── Database ─────────────────────────────────────────────────────────────────
+  - id: RDS-001
+    description: RDS instances must have deletion protection enabled in production
+    severity: HIGH
+    resource_types: ["aws_db_instance"]
+    message: "{resource_address} must have deletion_protection = true"
+    conditions:
+      - type: equals
+        field: deletion_protection
+        value: true
+        remediation: "Add deletion_protection = true to your aws_db_instance"
+
+  - id: RDS-002
+    description: RDS instances must have multi-AZ enabled
+    severity: MEDIUM
+    resource_types: ["aws_db_instance"]
+    message: "{resource_address} should have multi_az = true for resilience"
+    conditions:
+      - type: equals
+        field: multi_az
+        value: true
+
+  - id: RDS-003
+    description: RDS instances must not be publicly accessible
+    severity: CRITICAL
+    resource_types: ["aws_db_instance"]
+    message: "{resource_address} must have publicly_accessible = false"
+    conditions:
+      - type: equals
+        field: publicly_accessible
+        value: false
+
+  # ── Networking ────────────────────────────────────────────────────────────────
+  - id: SG-001
+    description: Security groups must have a meaningful description
+    severity: LOW
+    resource_types: ["aws_security_group"]
+    message: "{resource_address} has no description — add one explaining its purpose"
+    conditions:
+      - type: required
+        field: description
+      - type: not_equals
+        field: description
+        value: "Managed by Terraform"
+      - type: min_length
+        field: description
+        value: 10
