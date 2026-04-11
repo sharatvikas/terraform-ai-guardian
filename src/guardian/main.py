@@ -10,6 +10,7 @@ from guardian.ai.analyzer import analyze_with_ai
 from guardian.parser import parse_plan
 from guardian.reporter.github import build_pr_comment, compute_overall_risk, post_pr_comment
 from guardian.reporter.slack import post_analysis_to_slack
+from guardian.rules.cost import estimate_plan_cost, format_cost_summary
 from guardian.rules.security import RiskLevel, run_security_checks
 from guardian.rules.standards import StandardsLoader
 
@@ -50,6 +51,17 @@ def main() -> int:
         else:
             print(f"::warning::Standards file not found: {standards_file}")
 
+    # ── Cost estimation ──────────────────────────────────────────────────────
+    cost_summary = ""
+    if os.environ.get("INPUT_ESTIMATE-COST", "true").lower() != "false":
+        try:
+            cost_delta = estimate_plan_cost(plan.changes)
+            cost_summary = format_cost_summary(cost_delta)
+            _set_output("monthly-cost-delta", str(cost_delta.net_monthly_delta))
+            print(f"  Estimated net monthly delta: ${cost_delta.net_monthly_delta:+,.2f}")
+        except Exception as e:
+            print(f"::warning::Cost estimation failed: {e}")
+
     # ── AI analysis ──────────────────────────────────────────────────────────
     ai_summary = ""
     if os.environ.get("INPUT_ANTHROPIC-API-KEY") or os.environ.get("ANTHROPIC_API_KEY"):
@@ -63,7 +75,7 @@ def main() -> int:
     overall_risk = compute_overall_risk(findings)
     print(f"Overall risk: {overall_risk.name}")
 
-    comment = build_pr_comment(overall_risk, findings, ai_summary, plan_file)
+    comment = build_pr_comment(overall_risk, findings, ai_summary, plan_file, cost_summary=cost_summary)
 
     if os.environ.get("INPUT_GITHUB-TOKEN") or os.environ.get("GITHUB_TOKEN"):
         post_pr_comment(comment)
