@@ -1,0 +1,127 @@
+{
+  "format_version": "1.0",
+  "terraform_version": "1.7.0",
+  "resource_changes": [
+    {
+      "address": "aws_security_group.web",
+      "type": "aws_security_group",
+      "name": "web",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "name": "web-sg",
+          "description": "web",
+          "ingress": [
+            {
+              "from_port": 22,
+              "to_port": 22,
+              "protocol": "tcp",
+              "cidr_blocks": ["0.0.0.0/0"],
+              "description": ""
+            },
+            {
+              "from_port": 443,
+              "to_port": 443,
+              "protocol": "tcp",
+              "cidr_blocks": ["0.0.0.0/0"],
+              "description": "HTTPS"
+            }
+          ],
+          "tags": {}
+        }
+      }
+    },
+    {
+      "address": "aws_s3_bucket.data",
+      "type": "aws_s3_bucket",
+      "name": "data",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "bucket": "my-company-data-bucket",
+          "tags": {
+            "Environment": "production",
+            "Team": "data"
+          }
+        }
+      }
+    },
+    {
+      "address": "aws_db_instance.primary",
+      "type": "aws_db_instance",
+      "name": "primary",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "identifier": "prod-primary",
+          "engine": "postgres",
+          "engine_version": "15.4",
+          "instance_class": "db.r6g.xlarge",
+          "allocated_storage": 100,
+          "publicly_accessible": true,
+          "deletion_protection": false,
+          "storage_encrypted": false,
+          "multi_az": false,
+          "tags": {
+            "Environment": "production",
+            "Team": "backend"
+          }
+        }
+      }
+    },
+    {
+      "address": "aws_iam_role_policy.admin",
+      "type": "aws_iam_role_policy",
+      "name": "admin",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "name": "admin-policy",
+          "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"*\",\"Resource\":\"*\"}]}"
+        }
+      }
+    },
+    {
+      "address": "aws_instance.bastion",
+      "type": "aws_instance",
+      "name": "bastion",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "ami": "ami-0c55b159cbfafe1f0",
+          "instance_type": "t3.medium",
+          "metadata_options": {
+            "http_tokens": "optional"
+          },
+          "root_block_device": {
+            "volume_size": 20,
+            "encrypted": false
+          },
+          "tags": {
+            "Name": "bastion",
+            "Environment": "production",
+            "Team": "platform"
+          }
+        }
+      }
+    },
+    {
+      "address": "aws_kms_key.data",
+      "type": "aws_kms_key",
+      "name": "data",
+      "change": {
+        "actions": ["delete"],
+        "before": {
+          "description": "Data encryption key",
+          "deletion_window_in_days": 7
+        },
+        "after": null
+      }
+    }
+  ]
+}
