@@ -1,0 +1,253 @@
+##
+## Reusable workflow: Terraform Plan + AI Guardian Review
+##
+## Runs terraform init, terraform plan, converts plan to JSON,
+## then runs terraform-ai-guardian to post an AI-powered review on the PR.
+##
+## Usage in your repo's workflow:
+##
+##   jobs:
+##     plan-review:
+##       uses: sharatvikas/terraform-ai-guardian/.github/workflows/terraform-plan-review.yaml@main
+##       with:
+##         working-directory: terraform/environments/production
+##         aws-region: us-east-1
+##         workspace: production
+##       secrets:
+##         anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+##         aws-role-arn: ${{ secrets.TF_AWS_ROLE_ARN }}
+##
+
+name: Terraform Plan + AI Review
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: "Directory containing Terraform configuration"
+        type: string
+        required: false
+        default: "."
+      terraform-version:
+        description: "Terraform version to use"
+        type: string
+        required: false
+        default: "1.9.0"
+      aws-region:
+        description: "AWS region for provider"
+        type: string
+        required: false
+        default: "us-east-1"
+      workspace:
+        description: "Terraform workspace to select"
+        type: string
+        required: false
+        default: "default"
+      fail-on-risk:
+        description: "Minimum risk level that fails the PR check (CRITICAL, HIGH, MEDIUM)"
+        type: string
+        required: false
+        default: "CRITICAL"
+      standards-file:
+        description: "Org standards YAML path relative to working-directory"
+        type: string
+        required: false
+        default: ".guardian/standards.yaml"
+      enable-cost-estimation:
+        description: "Include cost estimation in the review"
+        type: boolean
+        required: false
+        default: true
+      max-tokens:
+        description: "Max Claude tokens for analysis (cost control)"
+        type: string
+        required: false
+        default: "4096"
+    secrets:
+      anthropic-api-key:
+        required: true
+      aws-role-arn:
+        description: "IAM role ARN to assume for planning (OIDC)"
+        required: false
+      github-token:
+        required: false
+
+  # Also allow direct trigger for testing
+  workflow_dispatch:
+    inputs:
+      working-directory:
+        description: "Terraform directory"
+        default: "."
+        required: false
+      terraform-version:
+        default: "1.9.0"
+        required: false
+
+permissions:
+  id-token: write    # Required for OIDC AWS auth
+  contents: read
+  pull-requests: write  # Required to post PR comments
+
+jobs:
+  # ── Plan ──────────────────────────────────────────────────────────────────────
+  plan:
+    name: Terraform Plan
+    runs-on: ubuntu-latest
+    outputs:
+      plan-file: ${{ steps.plan.outputs.plan-file }}
+      has-changes: ${{ steps.check.outputs.has-changes }}
+      resource-count: ${{ steps.check.outputs.resource-count }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform-version || '1.9.0' }}
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials (OIDC)
+        if: ${{ secrets.aws-role-arn != '' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.aws-role-arn }}
+          aws-region: ${{ inputs.aws-region || 'us-east-1' }}
+          role-session-name: terraform-ai-guardian-plan
+
+      - name: Terraform Init
+        working-directory: ${{ inputs.working-directory || '.' }}
+        run: terraform init -input=false -no-color
+        env:
+          TF_CLI_ARGS_init: "-upgrade=false"
+
+      - name: Select workspace
+        working-directory: ${{ inputs.working-directory || '.' }}
+        run: |
+          workspace="${{ inputs.workspace || 'default' }}"
+          if [ "$workspace" != "default" ]; then
+            terraform workspace select "$workspace" 2>/dev/null || terraform workspace new "$workspace"
+          fi
+
+      - name: Terraform Plan
+        id: plan
+        working-directory: ${{ inputs.working-directory || '.' }}
+        run: |
+          terraform plan \
+            -input=false \
+            -no-color \
+            -out=tfplan.binary \
+            -detailed-exitcode \
+          || EXIT_CODE=$?
+
+          # Exit code 2 = changes present, 0 = no changes, 1 = error
+          if [ "${EXIT_CODE:-0}" -eq 1 ]; then
+            echo "::error::Terraform plan failed"
+            exit 1
+          fi
+
+          # Convert binary plan to JSON for the guardian
+          terraform show -json tfplan.binary > tfplan.json
+
+          echo "plan-file=tfplan.json" >> "$GITHUB_OUTPUT"
+        continue-on-error: false
+
+      - name: Check plan summary
+        id: check
+        working-directory: ${{ inputs.working-directory || '.' }}
+        run: |
+          # Count resource changes from the JSON plan
+          to_add=$(jq '[.resource_changes[] | select(.change.actions[] == "create")] | length' tfplan.json)
+          to_change=$(jq '[.resource_changes[] | select(.change.actions[] == "update")] | length' tfplan.json)
+          to_destroy=$(jq '[.resource_changes[] | select(.change.actions[] == "delete")] | length' tfplan.json)
+          total=$(jq '.resource_changes | length' tfplan.json)
+
+          echo "has-changes=$([ $total -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "resource-count=$total" >> "$GITHUB_OUTPUT"
+          echo "### Plan Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Add | Change | Destroy |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-----|--------|---------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| $to_add | $to_change | $to_destroy |" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$to_destroy" -gt 0 ]; then
+            echo "::warning::Plan includes $to_destroy resource destructions — review carefully"
+          fi
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-json
+          path: ${{ inputs.working-directory || '.' }}/tfplan.json
+          retention-days: 5
+
+  # ── AI Guardian Review ────────────────────────────────────────────────────────
+  guardian-review:
+    name: AI Guardian Review
+    runs-on: ubuntu-latest
+    needs: plan
+    if: needs.plan.outputs.has-changes == 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-json
+          path: .
+
+      - name: Run terraform-ai-guardian
+        id: guardian
+        uses: sharatvikas/terraform-ai-guardian@main
+        with:
+          plan-file: tfplan.json
+          anthropic-api-key: ${{ secrets.anthropic-api-key }}
+          github-token: ${{ secrets.github-token || github.token }}
+          fail-on-risk: ${{ inputs.fail-on-risk || 'CRITICAL' }}
+          standards-file: ${{ inputs.standards-file || '.guardian/standards.yaml' }}
+          max-tokens: ${{ inputs.max-tokens || '4096' }}
+          post-comment: "true"
+
+      - name: Set risk badge
+        if: always()
+        run: |
+          risk="${{ steps.guardian.outputs.risk-level }}"
+          case "$risk" in
+            CRITICAL) icon="🔴" ;;
+            HIGH)     icon="🟠" ;;
+            MEDIUM)   icon="🟡" ;;
+            LOW)      icon="🟢" ;;
+            *)        icon="✅" ;;
+          esac
+          echo "## ${icon} Terraform Guardian: ${risk:-NONE}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Critical: ${{ steps.guardian.outputs.critical-count }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Warnings: ${{ steps.guardian.outputs.warning-count }}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail on critical risk
+        if: >
+          steps.guardian.outputs.risk-level == 'CRITICAL' &&
+          (inputs.fail-on-risk == 'CRITICAL' || inputs.fail-on-risk == '')
+        run: |
+          echo "::error::Terraform plan has CRITICAL risk findings — merge blocked"
+          exit 1
+
+      - name: Fail on high risk
+        if: >
+          steps.guardian.outputs.risk-level == 'HIGH' &&
+          inputs.fail-on-risk == 'HIGH'
+        run: |
+          echo "::error::Terraform plan has HIGH risk findings — merge blocked"
+          exit 1
+
+  # ── No Changes ───────────────────────────────────────────────────────────────
+  no-changes:
+    name: No Terraform Changes
+    runs-on: ubuntu-latest
+    needs: plan
+    if: needs.plan.outputs.has-changes == 'false'
+    steps:
+      - run: |
+          echo "✅ No Terraform changes in this PR — guardian review skipped"
+          echo "✅ No infrastructure changes detected" >> "$GITHUB_STEP_SUMMARY"
