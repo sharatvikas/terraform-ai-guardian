@@ -1,0 +1,258 @@
+##
+## Multi-Account Terraform AI Guardian Scan
+##
+## Runs terraform-ai-guardian across all AWS accounts in the org,
+## aggregates findings, and posts a unified security report.
+##
+## Trigger: schedule (nightly) or workflow_dispatch for on-demand scans.
+##
+name: Multi-Account Security Scan
+
+on:
+  schedule:
+    # Nightly at 02:00 UTC — outside business hours, before daily standups
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      accounts:
+        description: 'Comma-separated account IDs to scan (empty = all)'
+        required: false
+      severity_threshold:
+        description: 'Minimum severity to report'
+        default: 'MEDIUM'
+        type: choice
+        options: [LOW, MEDIUM, HIGH, CRITICAL]
+
+env:
+  GUARDIAN_VERSION: main
+  TF_VERSION: "1.7.5"
+
+jobs:
+  # ─── Discover accounts from AWS Organizations ─────────────────────────────
+  discover-accounts:
+    name: Discover AWS accounts
+    runs-on: ubuntu-latest
+    outputs:
+      accounts: ${{ steps.list.outputs.accounts }}
+    permissions:
+      id-token: write
+    steps:
+      - name: Configure AWS credentials (org management account)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ORG_READER_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: List active AWS accounts
+        id: list
+        run: |
+          if [ -n "${{ inputs.accounts }}" ]; then
+            # Manual override — use provided account list
+            ACCOUNT_JSON=$(echo "${{ inputs.accounts }}" | tr ',' '\n' | \
+              jq -R -s 'split("\n") | map(select(length > 0)) | map({"id": ., "name": .})' )
+          else
+            # Discover from AWS Organizations
+            ACCOUNT_JSON=$(aws organizations list-accounts \
+              --query 'Accounts[?Status==`ACTIVE`].[Id,Name]' \
+              --output text | awk '{print "{\"id\":\""$1"\",\"name\":\""$2"\"}"}' | \
+              jq -s '.')
+          fi
+          echo "accounts=${ACCOUNT_JSON}" >> "$GITHUB_OUTPUT"
+          echo "Discovered $(echo "$ACCOUNT_JSON" | jq length) accounts"
+
+  # ─── Scan each account in parallel ───────────────────────────────────────
+  scan-account:
+    name: Scan ${{ matrix.account.name }} (${{ matrix.account.id }})
+    needs: discover-accounts
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        account: ${{ fromJson(needs.discover-accounts.outputs.accounts) }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assume cross-account role
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ matrix.account.id }}:role/TerraformGuardianScanner
+          aws-region: us-east-1
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+      - name: Generate Terraform plan for account
+        id: plan
+        run: |
+          # Each account has its own terraform workspace
+          WORKSPACE="account-${{ matrix.account.id }}"
+          PLAN_FILE="${{ matrix.account.id }}-tfplan.json"
+
+          terraform init -input=false -reconfigure \
+            -backend-config="key=security-scan/${WORKSPACE}.tfstate"
+
+          terraform workspace select "$WORKSPACE" 2>/dev/null || \
+            terraform workspace new "$WORKSPACE"
+
+          terraform plan \
+            -input=false \
+            -lock=false \
+            -out=tfplan.bin 2>&1 || true
+
+          terraform show -json tfplan.bin > "${PLAN_FILE}" 2>/dev/null || \
+            echo '{"resource_changes":[]}' > "${PLAN_FILE}"
+
+          echo "plan_file=${PLAN_FILE}" >> "$GITHUB_OUTPUT"
+
+      - name: Run AI Guardian scan
+        id: guardian
+        uses: sharatvikas/terraform-ai-guardian@main
+        with:
+          plan-file: ${{ steps.plan.outputs.plan_file }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fail-on-risk: NONE   # Never fail — this is a reporting-only scan
+          standards-file: standards.yaml
+          estimate-cost: "false"   # Skip cost estimation for speed
+        continue-on-error: true
+
+      - name: Upload scan results
+        uses: actions/upload-artifact@v4
+        with:
+          name: scan-results-${{ matrix.account.id }}
+          path: |
+            ${{ steps.plan.outputs.plan_file }}
+          retention-days: 30
+
+      - name: Write account summary
+        run: |
+          cat > account-summary-${{ matrix.account.id }}.json << EOF
+          {
+            "account_id": "${{ matrix.account.id }}",
+            "account_name": "${{ matrix.account.name }}",
+            "risk_level": "${{ steps.guardian.outputs.risk-level }}",
+            "critical_count": "${{ steps.guardian.outputs.critical-count }}",
+            "warning_count": "${{ steps.guardian.outputs.warning-count }}",
+            "scanned_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          }
+          EOF
+
+      - name: Upload account summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary-${{ matrix.account.id }}
+          path: account-summary-${{ matrix.account.id }}.json
+          retention-days: 30
+
+  # ─── Aggregate and report ─────────────────────────────────────────────────
+  aggregate-report:
+    name: Aggregate security report
+    needs: [discover-accounts, scan-account]
+    runs-on: ubuntu-latest
+    if: always()
+    permissions:
+      issues: write
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all summaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: summary-*
+          merge-multiple: true
+
+      - name: Build aggregate report
+        id: report
+        run: |
+          # Merge all account summaries
+          SUMMARIES=$(cat account-summary-*.json 2>/dev/null | jq -s '.')
+
+          TOTAL=$(echo "$SUMMARIES" | jq length)
+          CRITICAL_ACCOUNTS=$(echo "$SUMMARIES" | jq '[.[] | select(.risk_level=="CRITICAL")] | length')
+          HIGH_ACCOUNTS=$(echo "$SUMMARIES" | jq '[.[] | select(.risk_level=="HIGH")] | length')
+          CLEAN_ACCOUNTS=$(echo "$SUMMARIES" | jq '[.[] | select(.risk_level=="NONE")] | length')
+
+          echo "total=${TOTAL}" >> "$GITHUB_OUTPUT"
+          echo "critical=${CRITICAL_ACCOUNTS}" >> "$GITHUB_OUTPUT"
+          echo "high=${HIGH_ACCOUNTS}" >> "$GITHUB_OUTPUT"
+          echo "clean=${CLEAN_ACCOUNTS}" >> "$GITHUB_OUTPUT"
+
+          # Build markdown report
+          DATE=$(date -u +"%Y-%m-%d")
+          cat > report.md << REPORTEOF
+          # Multi-Account Security Scan Report — ${DATE}
+
+          ## Summary
+
+          | Metric | Count |
+          |---|---|
+          | Accounts scanned | ${TOTAL} |
+          | Critical risk | ${CRITICAL_ACCOUNTS} |
+          | High risk | ${HIGH_ACCOUNTS} |
+          | Clean (no findings) | ${CLEAN_ACCOUNTS} |
+
+          ## Account Details
+
+          | Account | Risk Level | Critical | Warnings |
+          |---|---|---|---|
+          $(echo "$SUMMARIES" | jq -r '.[] | "| \(.account_name) (\(.account_id)) | \(.risk_level) | \(.critical_count) | \(.warning_count) |"')
+
+          ---
+          *Generated by [terraform-ai-guardian](https://github.com/sharatvikas/terraform-ai-guardian)*
+          REPORTEOF
+
+          cat report.md
+
+      - name: Create security issue for critical findings
+        if: steps.report.outputs.critical > 0
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          DATE=$(date -u +"%Y-%m-%d")
+          REPORT=$(cat report.md)
+
+          gh issue create \
+            --title "Security Scan: ${{ steps.report.outputs.critical }} account(s) with CRITICAL findings — ${DATE}" \
+            --label "security,multi-account,critical" \
+            --body "$REPORT"
+
+      - name: Post Slack report
+        if: env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          CRITICAL=${{ steps.report.outputs.critical }}
+          COLOR=$([ "$CRITICAL" -gt 0 ] && echo "#ff0000" || echo "#36a64f")
+          EMOJI=$([ "$CRITICAL" -gt 0 ] && echo ":rotating_light:" || echo ":white_check_mark:")
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          curl -s -X POST "$SLACK_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"attachments\": [{
+                \"color\": \"${COLOR}\",
+                \"blocks\": [
+                  {\"type\": \"header\", \"text\": {\"type\": \"plain_text\", \"text\": \"${EMOJI} Multi-Account Security Scan — $(date -u +%Y-%m-%d)\"}},
+                  {\"type\": \"section\", \"fields\": [
+                    {\"type\": \"mrkdwn\", \"text\": \"*Accounts Scanned*\n${{ steps.report.outputs.total }}\"},
+                    {\"type\": \"mrkdwn\", \"text\": \"*Critical Risk*\n${CRITICAL}\"},
+                    {\"type\": \"mrkdwn\", \"text\": \"*High Risk*\n${{ steps.report.outputs.high }}\"},
+                    {\"type\": \"mrkdwn\", \"text\": \"*Clean Accounts*\n${{ steps.report.outputs.clean }}\"}
+                  ]},
+                  {\"type\": \"actions\", \"elements\": [{
+                    \"type\": \"button\",
+                    \"text\": {\"type\": \"plain_text\", \"text\": \"View Full Report\"},
+                    \"url\": \"${RUN_URL}\"
+                  }]}
+                ]
+              }]
+            }"
