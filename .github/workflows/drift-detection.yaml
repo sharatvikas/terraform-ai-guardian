@@ -1,0 +1,281 @@
+##
+## Terraform Drift Detection — Scheduled State Reconciliation
+##
+## Runs `terraform plan` across all managed Terraform workspaces and detects
+## infrastructure drift (actual state diverged from declared state). Unlike
+## the security scan which reviews PRs, this workflow checks DEPLOYED infra
+## to catch manual changes, console edits, and automated drift.
+##
+## Trigger: Every 4 hours + on-demand
+##
+## What it does:
+##   1. Discovers all Terraform root modules in the repo
+##   2. For each module, runs `terraform plan -detailed-exitcode`
+##      (exit 0 = no changes, exit 2 = drift detected)
+##   3. AI analyzes the drift plan — classifies by risk and root cause
+##   4. Posts results to Slack with actionable remediation steps
+##   5. Opens GitHub Issues for HIGH/CRITICAL drift items
+##   6. Fails the workflow if CRITICAL drift is detected (e.g., security groups)
+##
+## Required secrets:
+##   AWS_DRIFT_ROLE_ARN      — cross-account role with read-only AWS access
+##   SLACK_WEBHOOK_URL       — Slack incoming webhook for notifications
+##   ANTHROPIC_API_KEY       — Claude API key for drift analysis
+##   TF_STATE_BUCKET         — S3 bucket for Terraform state (if using S3 backend)
+##
+
+name: Terraform Drift Detection
+
+on:
+  schedule:
+    - cron: '0 */4 * * *'   # Every 4 hours
+  workflow_dispatch:
+    inputs:
+      modules:
+        description: 'Comma-separated module paths to check (empty = all)'
+        required: false
+      fail_on_drift:
+        description: 'Fail workflow if any drift detected'
+        type: boolean
+        default: false
+      min_severity:
+        description: 'Minimum drift severity to report'
+        type: choice
+        options: [LOW, MEDIUM, HIGH, CRITICAL]
+        default: LOW
+
+env:
+  TF_VERSION: "1.7.5"
+  PYTHON_VERSION: "3.12"
+
+jobs:
+
+  # ─── Discover Terraform Modules ──────────────────────────────────────────────
+
+  discover-modules:
+    name: Discover Terraform modules
+    runs-on: ubuntu-latest
+    outputs:
+      modules: ${{ steps.discover.outputs.modules }}
+      module_count: ${{ steps.discover.outputs.module_count }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Discover root modules
+        id: discover
+        run: |
+          if [ -n "${{ inputs.modules }}" ]; then
+            # Manual input — split and validate
+            IFS=',' read -ra MODULE_LIST <<< "${{ inputs.modules }}"
+            MODULES_JSON=$(printf '%s\n' "${MODULE_LIST[@]}" | \
+              jq -R '.' | jq -s '.')
+          else
+            # Auto-discover: find dirs with main.tf but not modules/
+            MODULES_JSON=$(find . -name "main.tf" \
+              -not -path "*/modules/*" \
+              -not -path "*/.terraform/*" \
+              -not -path "*/examples/*" | \
+              xargs -I {} dirname {} | \
+              sort -u | \
+              jq -R '.' | jq -s '.')
+          fi
+
+          COUNT=$(echo "$MODULES_JSON" | jq 'length')
+          echo "modules=$MODULES_JSON" >> $GITHUB_OUTPUT
+          echo "module_count=$COUNT" >> $GITHUB_OUTPUT
+          echo "Discovered $COUNT Terraform modules"
+          echo "$MODULES_JSON" | jq -r '.[]'
+
+  # ─── Plan Each Module (detect drift) ─────────────────────────────────────────
+
+  plan-drift:
+    name: Plan — ${{ matrix.module }}
+    runs-on: ubuntu-latest
+    needs: discover-modules
+    if: needs.discover-modules.outputs.module_count != '0'
+
+    strategy:
+      fail-fast: false
+      matrix:
+        module: ${{ fromJson(needs.discover-modules.outputs.modules) }}
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DRIFT_ROLE_ARN }}
+          aws-region: us-east-1
+          role-duration-seconds: 3600
+
+      - name: Terraform init
+        working-directory: ${{ matrix.module }}
+        run: terraform init -input=false -no-color
+        env:
+          TF_CLI_ARGS_init: "-backend-config=bucket=${{ secrets.TF_STATE_BUCKET }}"
+
+      - name: Terraform plan (drift detection)
+        id: plan
+        working-directory: ${{ matrix.module }}
+        run: |
+          set +e
+          terraform plan \
+            -input=false \
+            -no-color \
+            -detailed-exitcode \
+            -out=drift.tfplan \
+            2>&1 | tee plan.txt
+          EXIT_CODE=$?
+          set -e
+
+          # exit 0 = no changes, exit 2 = drift, exit 1 = error
+          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+
+          if [ $EXIT_CODE -eq 0 ]; then
+            echo "drift_detected=false" >> $GITHUB_OUTPUT
+            echo "✓ No drift in ${{ matrix.module }}"
+          elif [ $EXIT_CODE -eq 2 ]; then
+            echo "drift_detected=true" >> $GITHUB_OUTPUT
+            echo "⚠ Drift detected in ${{ matrix.module }}"
+          else
+            echo "drift_detected=error" >> $GITHUB_OUTPUT
+            echo "✗ Plan error in ${{ matrix.module }}"
+          fi
+
+      - name: Convert plan to JSON
+        if: steps.plan.outputs.drift_detected == 'true'
+        working-directory: ${{ matrix.module }}
+        run: terraform show -json drift.tfplan > drift.json
+
+      - name: Upload drift artifacts
+        if: steps.plan.outputs.drift_detected == 'true' || steps.plan.outputs.drift_detected == 'error'
+        uses: actions/upload-artifact@v4
+        with:
+          name: drift-${{ matrix.module == '.' && 'root' || matrix.module | replace('/', '-') }}
+          path: |
+            ${{ matrix.module }}/plan.txt
+            ${{ matrix.module }}/drift.json
+          retention-days: 7
+
+      - name: Write module result
+        run: |
+          mkdir -p /tmp/drift-results
+          MODULE_SLUG=$(echo "${{ matrix.module }}" | sed 's|[./]|-|g' | sed 's|^-||')
+          cat > /tmp/drift-results/${MODULE_SLUG}.json << EOF
+          {
+            "module": "${{ matrix.module }}",
+            "drift_detected": "${{ steps.plan.outputs.drift_detected }}",
+            "exit_code": ${{ steps.plan.outputs.exit_code }}
+          }
+          EOF
+
+  # ─── AI Drift Analysis ────────────────────────────────────────────────────────
+
+  analyze-drift:
+    name: AI drift analysis
+    runs-on: ubuntu-latest
+    needs: plan-drift
+    if: always() && needs.plan-drift.result != 'skipped'
+
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install guardian
+        run: pip install -e src/ anthropic
+
+      - name: Download all drift artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: drift-*
+          path: /tmp/drift-artifacts
+          merge-multiple: true
+
+      - name: Run AI drift analysis
+        id: analyze
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.sha }}
+          MIN_SEVERITY: ${{ inputs.min_severity || 'LOW' }}
+        run: |
+          python -m guardian.drift analyze \
+            --artifacts-dir /tmp/drift-artifacts \
+            --output /tmp/drift-report.json \
+            --min-severity $MIN_SEVERITY
+
+          # Export summary for subsequent steps
+          CRITICAL=$(jq '.summary.critical_count // 0' /tmp/drift-report.json)
+          HIGH=$(jq '.summary.high_count // 0' /tmp/drift-report.json)
+          TOTAL=$(jq '.summary.total_drift_resources // 0' /tmp/drift-report.json)
+          MODULES_DRIFTED=$(jq '.summary.modules_with_drift // 0' /tmp/drift-report.json)
+
+          echo "critical=$CRITICAL" >> $GITHUB_OUTPUT
+          echo "high=$HIGH" >> $GITHUB_OUTPUT
+          echo "total=$TOTAL" >> $GITHUB_OUTPUT
+          echo "modules_drifted=$MODULES_DRIFTED" >> $GITHUB_OUTPUT
+
+      - name: Open GitHub Issues for HIGH/CRITICAL drift
+        if: steps.analyze.outputs.critical != '0' || steps.analyze.outputs.high != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python -m guardian.drift open-issues \
+            --report /tmp/drift-report.json \
+            --repo ${{ github.repository }} \
+            --min-severity HIGH
+
+      - name: Post Slack notification
+        if: always() && env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          python -m guardian.drift notify-slack \
+            --report /tmp/drift-report.json \
+            --webhook-url $SLACK_WEBHOOK_URL \
+            --run-url "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      - name: Write step summary
+        run: |
+          python -m guardian.drift summary-markdown \
+            --report /tmp/drift-report.json \
+            >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload drift report
+        uses: actions/upload-artifact@v4
+        with:
+          name: drift-analysis-report
+          path: /tmp/drift-report.json
+          retention-days: 30
+
+      - name: Fail on critical drift
+        if: steps.analyze.outputs.critical != '0'
+        run: |
+          echo "::error::CRITICAL drift detected in ${{ steps.analyze.outputs.critical }} resource(s). Manual intervention required."
+          exit 1
+
+      - name: Fail if any drift and --fail-on-drift
+        if: inputs.fail_on_drift == 'true' && steps.analyze.outputs.total != '0'
+        run: |
+          echo "::error::Drift detected in ${{ steps.analyze.outputs.total }} resource(s) across ${{ steps.analyze.outputs.modules_drifted }} module(s)."
+          exit 1
