@@ -8,6 +8,7 @@ from pathlib import Path
 
 from guardian.ai.analyzer import analyze_with_ai
 from guardian.parser import parse_plan
+from guardian.policy.opa import OPAEvaluator
 from guardian.reporter.github import build_pr_comment, compute_overall_risk, post_pr_comment
 from guardian.reporter.slack import post_analysis_to_slack
 from guardian.rules.cost import estimate_plan_cost, format_cost_summary
@@ -62,6 +63,24 @@ def main() -> int:
         except Exception as e:
             print(f"::warning::Cost estimation failed: {e}")
 
+    # ── OPA policy enforcement ───────────────────────────────────────────────
+    opa_result = None
+    if os.environ.get("INPUT_OPA-ENABLED", "true").lower() != "false":
+        print("Running OPA policy checks...")
+        try:
+            evaluator = OPAEvaluator(
+                bundle_path=os.environ.get("INPUT_OPA-BUNDLE", "policies"),
+                opa_url=os.environ.get("INPUT_OPA-URL", ""),
+            )
+            opa_result = evaluator.evaluate(str(plan_path))
+            print(f"  {len(opa_result.violations)} violations, {len(opa_result.warnings)} warnings")
+            _set_output("opa-violations", str(len(opa_result.violations)))
+            _set_output("opa-warnings", str(len(opa_result.warnings)))
+            if opa_result.violations:
+                print(f"::error::OPA policy violations detected:\n{opa_result.summary()}")
+        except Exception as e:
+            print(f"::warning::OPA evaluation failed: {e}")
+
     # ── AI analysis ──────────────────────────────────────────────────────────
     ai_summary = ""
     if os.environ.get("INPUT_ANTHROPIC-API-KEY") or os.environ.get("ANTHROPIC_API_KEY"):
@@ -101,6 +120,10 @@ def main() -> int:
     fail_threshold = RiskLevel.__members__.get(fail_on_risk_str, RiskLevel.HIGH)
     if overall_risk != RiskLevel.NONE and overall_risk.value >= fail_threshold.value:
         print(f"::error::Risk {overall_risk.name} >= threshold {fail_on_risk_str}")
+        return 1
+    # OPA violations always block (they represent hard policy constraints)
+    if opa_result and opa_result.has_violations():
+        print(f"::error::OPA policy violations block apply")
         return 1
     return 0
 
