@@ -17,10 +17,9 @@ Each finding includes:
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 
 # ─── Risk Classification ──────────────────────────────────────────────────────
@@ -236,49 +235,51 @@ def _classify_severity(resource_type: str, attrs: list[DriftAttribute], action: 
     attr_map = {a.name: a for a in attrs}
 
     # Check CRITICAL patterns
-    for rtype, attr, field, value in _CRITICAL_PATTERNS:
+    for rtype, attr, field_name, value in _CRITICAL_PATTERNS:
         if rtype != "*" and rtype != resource_type:
             continue
         if attr and attr not in attr_map:
             continue
-        if field == "after" and attr:
+        if field_name == "after" and attr:
             a = attr_map.get(attr)
             if a and _matches_value(a.after, value):
                 return "CRITICAL"
         elif rtype == resource_type and attr is None:
             return "CRITICAL"
-        elif attr and field is None and attr in attr_map:
+        elif attr and field_name is None and attr in attr_map:
             a = attr_map[attr]
             if value and _matches_value(a.after, value):
                 return "CRITICAL"
 
     # Check HIGH patterns
-    for rtype, attr, field, value in _HIGH_PATTERNS:
+    for rtype, attr, field_name, value in _HIGH_PATTERNS:
         if rtype != "*" and rtype != resource_type:
             continue
         if attr and attr not in attr_map:
             continue
-        if field == "after" and attr and attr in attr_map:
+        if field_name == "after" and attr and attr in attr_map:
             a = attr_map[attr]
             if _matches_value(str(a.after), value):
                 return "HIGH"
 
     # Destructive actions on data resources = HIGH by default
     if action in ("delete", "replace") and any(
-        kw in resource_type for kw in ("rds", "dynamodb", "s3", "efs", "elasticache")
+        kw in resource_type
+        for kw in ("rds", "db_instance", "dynamodb", "s3", "efs", "elasticache")
     ):
         return "HIGH"
 
+    # Tag-only changes = LOW (checked before generic MEDIUM patterns —
+    # a pure tag drift is cosmetic even though tag removal appears there)
+    if attrs and all(a.name in ("tags", "description", "name") for a in attrs):
+        return "LOW"
+
     # Check MEDIUM patterns
-    for rtype, attr, field, value in _MEDIUM_PATTERNS:
+    for rtype, attr, field_name, value in _MEDIUM_PATTERNS:
         if rtype != "*" and rtype != resource_type:
             continue
         if attr and attr in attr_map:
             return "MEDIUM"
-
-    # Tag-only changes = LOW
-    if all(a.name in ("tags", "description", "name") for a in attrs):
-        return "LOW"
 
     return "MEDIUM" if attrs else "LOW"
 
@@ -286,8 +287,10 @@ def _classify_severity(resource_type: str, attrs: list[DriftAttribute], action: 
 def _matches_value(actual: Any, expected: str) -> bool:
     if actual is None:
         return False
-    s = str(actual)
-    if expected in s:
+    # Case-insensitive: plan JSON booleans render as Python True/False,
+    # while pattern tables use lowercase "true"/"false".
+    s = str(actual).lower()
+    if expected.lower() in s:
         return True
     if isinstance(actual, list) and expected in actual:
         return True

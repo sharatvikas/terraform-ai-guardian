@@ -42,6 +42,7 @@ def run_security_rules(plan: TerraformPlan) -> list[Finding]:
             continue
 
         findings.extend(_check_iam(change))
+        findings.extend(_check_ec2(change))
         findings.extend(_check_security_groups(change))
         findings.extend(_check_s3(change))
         findings.extend(_check_rds(change))
@@ -63,9 +64,13 @@ def _check_iam(change: ResourceChange) -> list[Finding]:
     if isinstance(policy_doc, dict):
         policy_doc = str(policy_doc)
 
+    # Whitespace-tolerant: policy JSON may be compact or pretty-printed.
+    def _has_star(key: str) -> bool:
+        return bool(re.search(rf'"{key}"\s*:\s*(\[\s*)?"\*"', policy_doc))
+
     # Star action with star resource is admin
-    if '"Action": "*"' in policy_doc or '"Action":["*"]' in policy_doc:
-        if '"Resource": "*"' in policy_doc or '"Resource":["*"]' in policy_doc:
+    if _has_star("Action"):
+        if _has_star("Resource"):
             findings.append(Finding(
                 risk_level=RiskLevel.CRITICAL,
                 category="IAM",
@@ -91,7 +96,7 @@ def _check_iam(change: ResourceChange) -> list[Finding]:
             ))
 
     # PassRole is often used for privilege escalation
-    if "iam:PassRole" in policy_doc and '"Resource": "*"' in policy_doc:
+    if "iam:PassRole" in policy_doc and _has_star("Resource"):
         findings.append(Finding(
             risk_level=RiskLevel.HIGH,
             category="IAM",
@@ -102,6 +107,48 @@ def _check_iam(change: ResourceChange) -> list[Finding]:
                 "the holder can pass any role to any service."
             ),
             recommendation="Scope iam:PassRole to specific role ARNs.",
+        ))
+
+    return findings
+
+
+def _check_ec2(change: ResourceChange) -> list[Finding]:
+    findings = []
+
+    if change.resource_type != "aws_instance":
+        return []
+
+    after = change.after or {}
+
+    metadata_options = after.get("metadata_options") or {}
+    if isinstance(metadata_options, list):  # plan JSON may render blocks as lists
+        metadata_options = metadata_options[0] if metadata_options else {}
+    if metadata_options.get("http_tokens") != "required":
+        findings.append(Finding(
+            risk_level=RiskLevel.HIGH,
+            category="EC2",
+            resource_address=change.address,
+            title="EC2 instance does not enforce IMDSv2",
+            description=(
+                f"{change.address} allows IMDSv1 (http_tokens != 'required'). "
+                "IMDSv1 enables SSRF-based credential theft."
+            ),
+            recommendation=(
+                "Add metadata_options { http_tokens = \"required\" } to enforce IMDSv2."
+            ),
+        ))
+
+    root_device = after.get("root_block_device") or {}
+    if isinstance(root_device, list):
+        root_device = root_device[0] if root_device else {}
+    if root_device and root_device.get("encrypted") is False:
+        findings.append(Finding(
+            risk_level=RiskLevel.HIGH,
+            category="EC2",
+            resource_address=change.address,
+            title="EC2 root EBS volume is not encrypted",
+            description=f"{change.address} has root_block_device.encrypted = false.",
+            recommendation="Set root_block_device { encrypted = true } (requires replacement).",
         ))
 
     return findings

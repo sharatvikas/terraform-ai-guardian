@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import json
-import pytest
 
 from guardian.drift.analyzer import (
     DriftFinding,
     DriftReport,
     parse_plan_json,
     _classify_severity,
-    _diff_attributes,
     _normalize_action,
 )
 

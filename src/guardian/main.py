@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from pathlib import Path
@@ -10,18 +11,20 @@ from guardian.ai.analyzer import analyze_with_ai
 from guardian.parser import parse_plan
 from guardian.policy.opa import OPAEvaluator
 from guardian.reporter.github import build_pr_comment, compute_overall_risk, post_pr_comment
-from guardian.reporter.slack import post_analysis_to_slack
-from guardian.rules.cost import estimate_plan_cost, format_cost_summary
+from guardian.reporter.slack import ReviewSummary, SlackConfig, SlackReporter
+from guardian.rules.cost import changes_to_cost_inputs, estimate_plan_cost, format_cost_summary
 from guardian.rules.infracost import InfracostRunner
-from guardian.rules.security import RiskLevel, run_security_checks
-from guardian.rules.standards import StandardsLoader
+from guardian.rules.security import RiskLevel, run_security_rules
+from guardian.rules.standards import StandardsError, StandardsEvaluator, load_standards
+
+logging.basicConfig(level=os.environ.get("GUARDIAN_LOG_LEVEL", "INFO"))
 
 
 def main() -> int:
     plan_file = os.environ.get("INPUT_PLAN-FILE", os.environ.get("PLAN_FILE", "tfplan.json"))
-    fail_on_risk_str = os.environ.get("INPUT_FAIL-ON-RISK", "HIGH").upper()
+    fail_on_risk_str = os.environ.get("INPUT_FAIL-ON-RISK", os.environ.get("FAIL_ON_RISK", "HIGH")).upper()
     standards_file = os.environ.get("INPUT_STANDARDS-FILE", os.environ.get("STANDARDS_FILE", ""))
-    max_tokens = int(os.environ.get("INPUT_MAX-TOKENS", "2000"))
+    max_tokens = int(os.environ.get("INPUT_MAX-TOKENS", os.environ.get("MAX_TOKENS", "2000")))
 
     plan_path = Path(plan_file)
     if not plan_path.exists():
@@ -35,23 +38,30 @@ def main() -> int:
     except Exception as e:
         print(f"::error::Failed to parse plan: {e}", file=sys.stderr)
         return 1
-    print(f"  {len(plan.changes)} resource changes")
+    print(f"  {len(plan.resource_changes)} resource changes ({plan.summary()})")
 
     # ── Security rules ───────────────────────────────────────────────────────
     print("Running security checks...")
-    findings = run_security_checks(plan.changes)
+    findings = run_security_rules(plan)
     print(f"  {len(findings)} security findings")
 
     # ── Org standards ────────────────────────────────────────────────────────
-    if standards_file:
-        sp = Path(standards_file)
-        if sp.exists():
-            print(f"Running standards from {standards_file}...")
-            standards_violations = StandardsLoader(sp).evaluate(plan.changes)
-            findings = findings + standards_violations
+    standards_violations = []
+    try:
+        # Explicit file if provided; otherwise auto-discover .tf-guardian.yml etc.
+        if standards_file and not Path(standards_file).exists():
+            print(f"::warning::Standards file not found: {standards_file} — falling back to auto-discovery")
+            standards_file = ""
+        config = load_standards(standards_file or None)
+        if not config.is_empty:
+            print(f"Evaluating org standards from {config.source_file}...")
+            standards_violations = StandardsEvaluator(config).evaluate(plan)
+            findings = findings + [v.to_finding() for v in standards_violations]
             print(f"  {len(standards_violations)} standards violations")
-        else:
-            print(f"::warning::Standards file not found: {standards_file}")
+    except StandardsError as e:
+        print(f"::error::Invalid standards config: {e}", file=sys.stderr)
+        return 1
+    _set_output("standards-violations", str(len(standards_violations)))
 
     # ── Cost estimation ──────────────────────────────────────────────────────
     cost_summary = ""
@@ -60,9 +70,9 @@ def main() -> int:
         print("Running cost estimation...")
         runner = InfracostRunner()
         if runner.is_available:
-            print(f"  Using Infracost CLI (accurate pricing)")
+            print("  Using Infracost CLI (accurate pricing)")
         else:
-            print(f"  Using built-in estimator (approximate on-demand rates)")
+            print("  Using built-in estimator (approximate on-demand rates)")
         try:
             infracost_result = runner.estimate(plan_path)
             cost_summary = infracost_result.format_github_section()
@@ -72,10 +82,10 @@ def main() -> int:
             if infracost_result.exceeds_threshold:
                 threshold = float(os.environ.get("GUARDIAN_COST_THRESHOLD", "0"))
                 print(f"::warning::Cost delta ${infracost_result.diff_total_monthly_cost:+,.2f}/mo exceeds budget threshold ${threshold:,.0f}/mo")
-        except Exception as e:
+        except Exception:
             # Fallback to old estimator
             try:
-                cost_delta = estimate_plan_cost(plan.changes)
+                cost_delta = estimate_plan_cost(changes_to_cost_inputs(plan.resource_changes))
                 cost_summary = format_cost_summary(cost_delta)
                 _set_output("monthly-cost-delta", str(cost_delta.net_monthly_delta))
                 print(f"  Estimated net monthly delta: ${cost_delta.net_monthly_delta:+,.2f} (fallback)")
@@ -130,14 +140,22 @@ def main() -> int:
     if os.environ.get("INPUT_GITHUB-TOKEN") or os.environ.get("GITHUB_TOKEN"):
         post_pr_comment(comment)
 
-    if os.environ.get("SLACK_WEBHOOK_URL"):
-        post_analysis_to_slack(
+    slack_config = SlackConfig.from_env()
+    if slack_config.enabled or slack_config.dry_run:
+        print("Posting review to Slack...")
+        SlackReporter(slack_config).post_review(ReviewSummary(
             overall_risk=overall_risk,
             findings=findings,
-            ai_summary=ai_summary,
+            violations=standards_violations,
             plan_file=plan_file,
-            pr_url=_pr_url(),
-        )
+            pr_url=_pr_url() or "",
+            pr_key=_pr_key(),
+            ai_summary=ai_summary,
+            cost_delta_monthly=(
+                infracost_result.diff_total_monthly_cost if infracost_result else None
+            ),
+            cost_source=infracost_result.source if infracost_result else "",
+        ))
 
     # ── GH Action outputs ────────────────────────────────────────────────────
     critical_count = sum(1 for f in findings if f.risk_level == RiskLevel.CRITICAL)
@@ -149,12 +167,14 @@ def main() -> int:
 
     # ── Exit code ─────────────────────────────────────────────────────────────
     fail_threshold = RiskLevel.__members__.get(fail_on_risk_str, RiskLevel.HIGH)
-    if overall_risk != RiskLevel.NONE and overall_risk.value >= fail_threshold.value:
+    if overall_risk != RiskLevel.NONE and (
+        overall_risk == fail_threshold or overall_risk > fail_threshold
+    ):
         print(f"::error::Risk {overall_risk.name} >= threshold {fail_on_risk_str}")
         return 1
     # OPA violations always block (they represent hard policy constraints)
     if opa_result and opa_result.has_violations():
-        print(f"::error::OPA policy violations block apply")
+        print("::error::OPA policy violations block apply")
         return 1
     return 0
 
@@ -175,8 +195,15 @@ def _write_step_summary(content: str) -> None:
 
 def _pr_url() -> str | None:
     repo = os.environ.get("GITHUB_REPOSITORY", "")
-    pr = os.environ.get("PR_NUMBER", "")
+    pr = os.environ.get("GITHUB_PR_NUMBER", os.environ.get("PR_NUMBER", ""))
     return f"https://github.com/{repo}/pull/{pr}" if repo and pr else None
+
+
+def _pr_key() -> str:
+    """Stable per-PR identity used for Slack thread-per-PR grouping."""
+    repo = os.environ.get("GITHUB_REPOSITORY", "")
+    pr = os.environ.get("GITHUB_PR_NUMBER", os.environ.get("PR_NUMBER", ""))
+    return f"{repo}#{pr}" if repo and pr else ""
 
 
 if __name__ == "__main__":

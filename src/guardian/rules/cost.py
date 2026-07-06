@@ -8,7 +8,10 @@ This module is intentionally self-contained with no external dependencies.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover
+    from guardian.parser import ResourceChange
 
 
 # ─── Pricing tables (on-demand, us-east-1, USD/hr unless noted) ─────────────
@@ -69,6 +72,27 @@ class CostDelta:
     net_monthly_delta: float
     estimates: list[ResourceCostEstimate]
     warnings: list[str]
+
+
+def changes_to_cost_inputs(changes: list["ResourceChange"]) -> list[dict[str, Any]]:
+    """Adapt parsed ResourceChange objects to the dict shape estimate_plan_cost expects."""
+    inputs: list[dict[str, Any]] = []
+    for c in changes:
+        if c.is_create:
+            action = "create"
+        elif c.is_destroy:
+            action = "delete"
+        elif c.is_update:
+            action = "update"
+        else:
+            action = "no-op"
+        inputs.append({
+            "type": c.resource_type,
+            "address": c.address,
+            "action": action,
+            "config": (c.after if action != "delete" else c.before) or {},
+        })
+    return inputs
 
 
 def estimate_plan_cost(resources: list[dict[str, Any]]) -> CostDelta:
@@ -234,8 +258,8 @@ def format_cost_summary(delta: CostDelta) -> str:
     lines = [
         "## Cost Estimate",
         "",
-        f"| | Monthly (USD) |",
-        f"|---|---|",
+        "| | Monthly (USD) |",
+        "|---|---|",
         f"| New resources | ${delta.new_monthly_cost:,.2f} |",
         f"| Removed resources | -${delta.removed_monthly_cost:,.2f} |",
         f"| **Net change** | **{sign}${delta.net_monthly_delta:,.2f}** |",

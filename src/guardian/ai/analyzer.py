@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import os
-import json
-from dataclasses import asdict
 
 import anthropic
 
 from guardian.parser import TerraformPlan
-from guardian.rules.security import Finding, RiskLevel
+from guardian.rules.security import Finding
 
 
 _SYSTEM_PROMPT = """You are a senior Site Reliability Engineer and AWS security architect reviewing

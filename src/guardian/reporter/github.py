@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import httpx
 
-from guardian.parser import TerraformPlan
 from guardian.rules.security import Finding, RiskLevel
 
 
@@ -71,8 +70,8 @@ def build_pr_comment(
     lines.extend([
         "",
         "---",
-        f"*Analysis by [terraform-ai-guardian](https://github.com/sharatvikas/terraform-ai-guardian) "
-        f"using Claude API*",
+        "*Analysis by [terraform-ai-guardian](https://github.com/sharatvikas/terraform-ai-guardian) "
+        "using Claude API*",
     ])
 
     return "\n".join(lines)

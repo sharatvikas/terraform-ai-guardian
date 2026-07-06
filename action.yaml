@@ -1,5 +1,5 @@
 name: 'Terraform AI Guardian'
-description: 'AI-powered Terraform plan reviewer — flags security risks, blast radius, and cost implications before merge'
+description: 'AI-powered Terraform plan reviewer — flags security risks, blast radius, cost, and org-standards drift before merge'
 author: 'sharatvikas'
 
 branding:
@@ -27,9 +27,12 @@ inputs:
     default: 'CRITICAL'
 
   standards-file:
-    description: 'Path to org standards YAML file (optional)'
+    description: >-
+      Path to the org standards config. Defaults to auto-discovery of
+      .tf-guardian.yml / .tf-guardian.yaml / .guardian/standards.yaml / standards.yaml
+      in the working directory.
     required: false
-    default: '.guardian/standards.yaml'
+    default: ''
 
   max-tokens:
     description: 'Maximum tokens for Claude analysis (cost control)'
@@ -41,6 +44,29 @@ inputs:
     required: false
     default: 'true'
 
+  slack-webhook-url:
+    description: 'Slack incoming webhook URL for review notifications (simple mode, no threading)'
+    required: false
+    default: ''
+
+  slack-bot-token:
+    description: >-
+      Slack bot token (xoxb-…) for chat.postMessage delivery. Enables the
+      thread-per-PR convention: repeat reviews of the same PR reply in one thread.
+      Requires slack-channel. Scopes needed: chat:write, channels:history.
+    required: false
+    default: ''
+
+  slack-channel:
+    description: 'Slack channel ID (e.g. C0123456789) used with slack-bot-token'
+    required: false
+    default: ''
+
+  slack-dry-run:
+    description: 'Log the Slack payload instead of sending it (true/false) — useful while wiring credentials'
+    required: false
+    default: 'false'
+
 outputs:
   risk-level:
     description: 'Detected risk level: CRITICAL, HIGH, MEDIUM, LOW, or NONE'
@@ -48,6 +74,10 @@ outputs:
     description: 'Number of critical issues found'
   warning-count:
     description: 'Number of warnings found'
+  standards-violations:
+    description: 'Number of org-standards violations found'
+  monthly-cost-delta:
+    description: 'Estimated net monthly cost delta in USD'
   report-url:
     description: 'URL to the full analysis report'
 
@@ -62,6 +92,10 @@ runs:
     STANDARDS_FILE: ${{ inputs.standards-file }}
     MAX_TOKENS: ${{ inputs.max-tokens }}
     POST_COMMENT: ${{ inputs.post-comment }}
+    SLACK_WEBHOOK_URL: ${{ inputs.slack-webhook-url }}
+    SLACK_BOT_TOKEN: ${{ inputs.slack-bot-token }}
+    SLACK_CHANNEL: ${{ inputs.slack-channel }}
+    SLACK_DRY_RUN: ${{ inputs.slack-dry-run }}
     GITHUB_REPOSITORY: ${{ github.repository }}
     GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
     GITHUB_SHA: ${{ github.sha }}

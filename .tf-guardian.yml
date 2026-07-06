@@ -1,0 +1,66 @@
+# terraform-ai-guardian — org standards configuration
+#
+# Placed at the repo root (or pass `standards-file:` to the action).
+# Every section is optional; omit what you don't want enforced.
+# Full reference: README.md → "Org Standards".
+
+version: 1
+
+# Tags every taggable resource must carry (checked on create/update).
+required_tags:
+  - Environment
+  - Team
+  - Owner
+
+# Allowed values for specific tags (only checked when the tag is present).
+tag_values:
+  Environment: [production, staging, development, sandbox]
+
+# Instance size allowlists per resource type — glob patterns.
+allowed_instance_types:
+  aws_instance: ["t3.*", "t4g.*", "m6i.*", "m7g.*", "c6i.*", "r6g.*"]
+  aws_db_instance: ["db.t3.*", "db.t4g.*", "db.r6g.*", "db.m6g.*"]
+  aws_elasticache_cluster: ["cache.t3.*", "cache.t4g.*", "cache.r6g.*"]
+
+# Regions infrastructure may be deployed to. Checked against provider
+# configuration, resource `region` attributes, and availability zones.
+allowed_regions:
+  - us-east-1
+  - us-west-2
+
+# Encryption-at-rest requirements per service.
+encryption:
+  s3: true        # bucket must have SSE config (inline or companion resource)
+  rds: true       # storage_encrypted = true on instances and clusters
+  ebs: true       # aws_ebs_volume + instance root volumes
+  efs: true
+  dynamodb: false # SSE-by-default is acceptable
+
+# Naming conventions per resource type — Python regexes matched against the
+# provider-visible name (bucket / name / identifier), falling back to the
+# Terraform resource name.
+naming_patterns:
+  aws_s3_bucket: "^[a-z0-9][a-z0-9.-]{2,62}$"
+  aws_iam_role: "^[a-zA-Z0-9+=,.@_-]+$"
+
+# Only these module sources may be used. Resources from other modules are
+# flagged. Set enforce: false to load the list without enforcing it.
+module_allowlist:
+  enforce: true
+  allowed_sources:
+    - "terraform-aws-modules/*"
+    - "git::https://github.com/sharatvikas/*"
+    - "./modules/*"
+
+# Optional per-section severity overrides (CRITICAL, HIGH, MEDIUM, LOW).
+severities:
+  required_tags: HIGH
+  tag_values: MEDIUM
+  allowed_instance_types: MEDIUM
+  allowed_regions: HIGH
+  encryption: HIGH
+  naming_patterns: LOW
+  module_allowlist: HIGH
+
+# Legacy condition-based rules are still supported under a `standards:` key —
+# see .guardian/standards.yaml format in the README.

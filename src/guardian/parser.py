@@ -64,6 +64,10 @@ class TerraformPlan:
     output_changes: dict[str, Any] = field(default_factory=dict)
     prior_state: dict[str, Any] | None = None
     variables: dict[str, Any] = field(default_factory=dict)
+    # module address (e.g. "module.vpc") -> module source (e.g. "terraform-aws-modules/vpc/aws")
+    module_sources: dict[str, str] = field(default_factory=dict)
+    # provider config key (e.g. "aws", "aws.us_west") -> statically-known region
+    provider_regions: dict[str, str] = field(default_factory=dict)
 
     @property
     def creates(self) -> list[ResourceChange]:
@@ -126,6 +130,8 @@ def parse_plan(plan_file: str | Path) -> TerraformPlan:
             )
         )
 
+    configuration = raw.get("configuration", {}) or {}
+
     return TerraformPlan(
         format_version=raw.get("format_version", ""),
         terraform_version=raw.get("terraform_version", ""),
@@ -133,4 +139,35 @@ def parse_plan(plan_file: str | Path) -> TerraformPlan:
         output_changes=raw.get("output_changes", {}),
         prior_state=raw.get("prior_state"),
         variables=raw.get("variables", {}),
+        module_sources=_extract_module_sources(configuration.get("root_module", {}) or {}),
+        provider_regions=_extract_provider_regions(configuration.get("provider_config", {}) or {}),
     )
+
+
+def _extract_module_sources(module_config: dict[str, Any], prefix: str = "") -> dict[str, str]:
+    """Recursively map module addresses ("module.vpc") to their declared source strings."""
+    sources: dict[str, str] = {}
+    for name, call in (module_config.get("module_calls", {}) or {}).items():
+        if not isinstance(call, dict):
+            continue
+        address = f"{prefix}.module.{name}" if prefix else f"module.{name}"
+        source = call.get("source", "")
+        if source:
+            sources[address] = source
+        nested = call.get("module", {}) or {}
+        sources.update(_extract_module_sources(nested, prefix=address))
+    return sources
+
+
+def _extract_provider_regions(provider_config: dict[str, Any]) -> dict[str, str]:
+    """Extract statically-known provider regions from the plan's configuration block."""
+    regions: dict[str, str] = {}
+    for key, cfg in provider_config.items():
+        if not isinstance(cfg, dict):
+            continue
+        region_expr = (cfg.get("expressions", {}) or {}).get("region", {})
+        if isinstance(region_expr, dict):
+            value = region_expr.get("constant_value")
+            if isinstance(value, str) and value:
+                regions[key] = value
+    return regions

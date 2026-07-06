@@ -305,7 +305,6 @@ def _check_iam_wildcard_policies(
     changes: list[dict],
 ) -> tuple[list[PolicyViolation], list[PolicyViolation]]:
     violations, warnings = [], []
-    import re
     for rc in _resource_changes_of_type(changes, "aws_iam_"):
         after = rc.get("change", {}).get("after", {}) or {}
         policy_doc = after.get("policy") or after.get("assume_role_policy", "")

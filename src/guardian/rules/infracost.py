@@ -81,7 +81,7 @@ class InfracostResult:
             lines.append(f"   Budget: ${COST_THRESHOLD:,.0f}/mo threshold — {status}")
 
         if self.resources:
-            lines.append(f"\n   Top 5 resources by cost:")
+            lines.append("\n   Top 5 resources by cost:")
             top = sorted(self.resources, key=lambda r: r.monthly_cost, reverse=True)[:5]
             for r in top:
                 lines.append(f"     ${r.monthly_cost:>10,.2f}/mo  {r.name}")
@@ -99,8 +99,8 @@ class InfracostResult:
         lines = [
             "### 💰 Cost Estimate",
             "",
-            f"| | Before | After | Delta |",
-            f"|---|---|---|---|",
+            "| | Before | After | Delta |",
+            "|---|---|---|---|",
             f"| Monthly | ${self.past_total_monthly_cost:,.2f} | ${self.total_monthly_cost:,.2f} | **{delta_str}**{threshold_note} |",
             f"| Hourly  | ${self.past_total_monthly_cost/730:,.4f} | ${self.total_monthly_cost/730:,.4f} | — |",
             "",
@@ -178,7 +178,6 @@ class InfracostRunner:
 
     def _parse_infracost_json(self, data: dict[str, Any]) -> InfracostResult:
         """Parse infracost JSON output format."""
-        summary = data.get("summary", {})
         projects = data.get("projects", [])
 
         total_monthly = float(data.get("totalMonthlyCost", 0) or 0)
@@ -213,11 +212,11 @@ class InfracostRunner:
     def _run_builtin(self, plan_json_path: Path) -> InfracostResult:
         """Fall back to the built-in approximate estimator."""
         from guardian.parser import parse_plan
-        from guardian.rules.cost import estimate_plan_cost
+        from guardian.rules.cost import changes_to_cost_inputs, estimate_plan_cost
 
         try:
             plan = parse_plan(plan_json_path)
-            delta = estimate_plan_cost(plan.changes)
+            delta = estimate_plan_cost(changes_to_cost_inputs(plan.resource_changes))
 
             return InfracostResult(
                 total_monthly_cost=max(0.0, delta.net_monthly_delta),

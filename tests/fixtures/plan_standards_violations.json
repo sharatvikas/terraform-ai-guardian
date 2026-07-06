@@ -1,0 +1,144 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.7.0",
+  "resource_changes": [
+    {
+      "address": "aws_instance.legacy",
+      "type": "aws_instance",
+      "name": "legacy",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "ami": "ami-0c55b159cbfafe1f0",
+          "instance_type": "m4.10xlarge",
+          "availability_zone": "eu-central-1a",
+          "metadata_options": {"http_tokens": "required"},
+          "root_block_device": {"volume_size": 100, "encrypted": false},
+          "tags": {
+            "Name": "legacy-box",
+            "Environment": "prod"
+          }
+        }
+      }
+    },
+    {
+      "address": "aws_s3_bucket.Analytics_Data",
+      "type": "aws_s3_bucket",
+      "name": "Analytics_Data",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "bucket": "Analytics_Data_Bucket",
+          "tags": {
+            "Environment": "production",
+            "Team": "data",
+            "Owner": "data@example.com"
+          }
+        }
+      }
+    },
+    {
+      "address": "aws_db_instance.reporting",
+      "type": "aws_db_instance",
+      "name": "reporting",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["update"],
+        "before": {
+          "identifier": "reporting",
+          "storage_encrypted": false
+        },
+        "after": {
+          "identifier": "reporting",
+          "engine": "mysql",
+          "instance_class": "db.m3.medium",
+          "storage_encrypted": false,
+          "publicly_accessible": false,
+          "tags": {
+            "Environment": "production",
+            "Team": "data",
+            "Owner": "data@example.com"
+          }
+        }
+      }
+    },
+    {
+      "address": "aws_ebs_volume.scratch",
+      "type": "aws_ebs_volume",
+      "name": "scratch",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "size": 200,
+          "encrypted": false,
+          "availability_zone": "us-east-1a",
+          "tags": {
+            "Environment": "production",
+            "Team": "platform",
+            "Owner": "sre@example.com"
+          }
+        }
+      }
+    },
+    {
+      "address": "module.snowflake_loader.aws_iam_role.loader",
+      "module_address": "module.snowflake_loader",
+      "type": "aws_iam_role",
+      "name": "loader",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "name": "loader-role",
+          "tags": {
+            "Environment": "production",
+            "Team": "data",
+            "Owner": "data@example.com"
+          }
+        }
+      }
+    },
+    {
+      "address": "aws_db_instance.deprecated",
+      "type": "aws_db_instance",
+      "name": "deprecated",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["delete"],
+        "before": {
+          "identifier": "deprecated",
+          "storage_encrypted": false
+        },
+        "after": null
+      }
+    }
+  ],
+  "configuration": {
+    "provider_config": {
+      "aws": {
+        "name": "aws",
+        "expressions": {"region": {"constant_value": "us-east-1"}}
+      },
+      "aws.frankfurt": {
+        "name": "aws",
+        "alias": "frankfurt",
+        "expressions": {"region": {"constant_value": "eu-central-1"}}
+      }
+    },
+    "root_module": {
+      "module_calls": {
+        "snowflake_loader": {
+          "source": "git::https://github.com/random-person/snowflake-loader",
+          "module": {}
+        }
+      }
+    }
+  }
+}

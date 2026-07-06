@@ -13,9 +13,10 @@ import json
 import os
 import sys
 import urllib.request
+import argparse
+import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 from guardian.drift.analyzer import (
     DriftFinding,
@@ -255,8 +256,8 @@ def cmd_summary_markdown(args) -> None:
     status = "✅ Clean" if total == 0 else ("🔴 Critical Drift" if critical > 0 else "🟠 Drift Detected")
 
     print(f"## Terraform Drift Report — {status}\n")
-    print(f"| | Count |")
-    print(f"|---|---|")
+    print("| | Count |")
+    print("|---|---|")
     print(f"| Modules scanned | {modules_scanned} |")
     print(f"| Modules with drift | {modules_drifted} |")
     print(f"| 🔴 Critical | {critical} |")
@@ -382,8 +383,6 @@ def _discover_all_modules(artifacts_dir: str) -> list[str]:
 
 # ─── Main Dispatcher ──────────────────────────────────────────────────────────
 
-import argparse
-import re
 
 
 def main() -> None:

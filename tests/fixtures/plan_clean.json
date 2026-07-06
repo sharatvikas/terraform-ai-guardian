@@ -1,0 +1,126 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.7.0",
+  "resource_changes": [
+    {
+      "address": "aws_instance.api",
+      "type": "aws_instance",
+      "name": "api",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "ami": "ami-0c55b159cbfafe1f0",
+          "instance_type": "t3.large",
+          "availability_zone": "us-east-1a",
+          "metadata_options": {"http_tokens": "required"},
+          "root_block_device": {"volume_size": 50, "encrypted": true},
+          "tags": {
+            "Name": "api-server",
+            "Environment": "production",
+            "Team": "platform",
+            "Owner": "sre@example.com"
+          }
+        }
+      }
+    },
+    {
+      "address": "aws_s3_bucket.logs",
+      "type": "aws_s3_bucket",
+      "name": "logs",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "bucket": "acme-prod-logs",
+          "tags": {
+            "Environment": "production",
+            "Team": "platform",
+            "Owner": "sre@example.com"
+          }
+        }
+      }
+    },
+    {
+      "address": "aws_s3_bucket_server_side_encryption_configuration.logs",
+      "type": "aws_s3_bucket_server_side_encryption_configuration",
+      "name": "logs",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "bucket": "acme-prod-logs",
+          "rule": [
+            {
+              "apply_server_side_encryption_by_default": [
+                {"sse_algorithm": "aws:kms"}
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "address": "aws_db_instance.primary",
+      "type": "aws_db_instance",
+      "name": "primary",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "identifier": "prod-primary",
+          "engine": "postgres",
+          "instance_class": "db.r6g.large",
+          "storage_encrypted": true,
+          "publicly_accessible": false,
+          "deletion_protection": true,
+          "multi_az": true,
+          "tags": {
+            "Environment": "production",
+            "Team": "data",
+            "Owner": "data@example.com"
+          }
+        }
+      }
+    },
+    {
+      "address": "module.vpc.aws_vpc.this",
+      "module_address": "module.vpc",
+      "type": "aws_vpc",
+      "name": "this",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "cidr_block": "10.0.0.0/16",
+          "tags": {
+            "Environment": "production",
+            "Team": "platform",
+            "Owner": "sre@example.com"
+          }
+        }
+      }
+    }
+  ],
+  "configuration": {
+    "provider_config": {
+      "aws": {
+        "name": "aws",
+        "expressions": {"region": {"constant_value": "us-east-1"}}
+      }
+    },
+    "root_module": {
+      "module_calls": {
+        "vpc": {
+          "source": "terraform-aws-modules/vpc/aws",
+          "module": {}
+        }
+      }
+    }
+  }
+}

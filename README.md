@@ -130,35 +130,88 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           # Optional: block merge if HIGH risk detected
           fail-on-risk: HIGH
-          # Optional: custom org standards
-          standards-file: .guardian/standards.yaml
+          # Optional: explicit standards config (auto-discovered otherwise)
+          standards-file: .tf-guardian.yml
+          # Optional: Slack notifications (see below)
+          slack-bot-token: ${{ secrets.SLACK_BOT_TOKEN }}
+          slack-channel: C0INFRA
 ```
 
-### Custom Org Standards
+### Org Standards (`.tf-guardian.yml`)
+
+Drop a `.tf-guardian.yml` at the repo root (or point `standards-file` anywhere).
+Guardian auto-discovers `.tf-guardian.yml`, `.tf-guardian.yaml`,
+`.guardian/standards.yaml`, then `standards.yaml`. Every section is optional.
 
 ```yaml
-# .guardian/standards.yaml
-required_tags:
-  - team
-  - environment
-  - cost-center
-  - managed-by
+version: 1
 
-blocked_resources:
-  - aws_instance:  # Must use EKS instead
-      message: "Use EKS pods instead of bare EC2 instances"
-      exceptions: [bastion, jenkins]
+# Tags every taggable resource must carry (checked on create/update)
+required_tags: [Environment, Team, Owner]
 
-instance_allowlist:
-  ec2: [t3.medium, t3.large, c5.xlarge, c5.2xlarge, m5.xlarge, m5.2xlarge]
-  rds: [db.t3.medium, db.r5.large, db.r5.xlarge]
+# Allowed values for specific tags
+tag_values:
+  Environment: [production, staging, development, sandbox]
 
-security_rules:
-  - no_public_rds: true
-  - no_public_s3: true
-  - require_encryption_at_rest: true
-  - max_iam_policy_statements: 10
+# Instance-size allowlists per resource type — glob patterns
+allowed_instance_types:
+  aws_instance: ["t3.*", "m6i.*"]
+  aws_db_instance: ["db.t3.*", "db.r6g.*"]
+
+# Regions infrastructure may target. Checked against provider config,
+# resource `region` attributes, and availability zones.
+allowed_regions: [us-east-1, us-west-2]
+
+# Encryption-at-rest requirements per service
+encryption:
+  s3: true      # SSE config inline or via companion resource
+  rds: true     # storage_encrypted on instances + clusters
+  ebs: true     # volumes + instance root block devices
+  efs: true
+  dynamodb: false
+
+# Naming conventions — Python regexes per resource type
+naming_patterns:
+  aws_s3_bucket: "^[a-z0-9][a-z0-9.-]{2,62}$"
+
+# Only these module sources may be used (glob patterns)
+module_allowlist:
+  enforce: true
+  allowed_sources:
+    - "terraform-aws-modules/*"
+    - "./modules/*"
+
+# Per-section severity overrides (CRITICAL / HIGH / MEDIUM / LOW)
+severities:
+  naming_patterns: LOW
 ```
+
+Each violation is structured — rule id (`STD-TAG-001`, `STD-ENC-RDS`,
+`STD-MOD-001`, …), severity, resource address, message, and a fix hint — and
+feeds into the overall risk gate, the PR comment, and the Slack summary. An
+invalid config (bad regex, unknown severity, malformed YAML) **fails the run
+loudly** instead of silently skipping checks.
+
+Legacy condition-based rules are still supported under a `standards:` key
+(`type: required|equals|not_equals|matches|not_matches|in|not_in|min_length`) —
+see `standards.yaml` in this repo for a complete example.
+
+### Slack Notifications
+
+Two delivery modes, plus a dry-run:
+
+| Mode | Configuration | Behaviour |
+|------|--------------|-----------|
+| Webhook | `slack-webhook-url` | One message per review |
+| Bot token | `slack-bot-token` + `slack-channel` | **Thread-per-PR**: the first review of a PR posts a parent message; later runs for the same PR reply in its thread |
+| Dry run | `slack-dry-run: true` | Logs the exact Block Kit payload, sends nothing |
+
+The message is a Block Kit summary: risk level, finding counts, standards
+violation count, monthly cost delta (when Infracost or the built-in estimator
+ran), top findings, and the AI analysis. The bot token needs `chat:write`
+(plus `channels:history` for thread lookup; without it Guardian degrades
+gracefully to non-threaded posts). Slack failures never fail the CI gate —
+they log a workflow warning.
 
 ---
 
@@ -197,28 +250,31 @@ PR opened with Terraform changes
 ```
 terraform-ai-guardian/
 ├── action.yaml                 # GitHub Action definition
+├── .tf-guardian.yml            # Example org standards config
 ├── src/
 │   └── guardian/
 │       ├── main.py             # Action entrypoint
-│       ├── parser.py           # Terraform plan JSON parser
+│       ├── parser.py           # Terraform plan JSON parser (+ module sources, provider regions)
 │       ├── rules/
 │       │   ├── security.py     # Security rule engine
-│       │   ├── blast_radius.py # Blast radius calculator
-│       │   └── standards.py    # Org standards checker
+│       │   ├── standards.py    # Org standards engine (.tf-guardian.yml)
+│       │   ├── cost.py         # Built-in cost estimator
+│       │   └── infracost.py    # Infracost CLI integration
+│       ├── policy/
+│       │   └── opa.py          # OPA/Rego policy enforcement
+│       ├── drift/              # Nightly drift detection engine + CLI
 │       ├── ai/
 │       │   └── analyzer.py     # Claude API deep analysis
 │       └── reporter/
 │           ├── github.py       # PR comment formatter
-│           └── slack.py        # Slack notification
-├── tests/
-│   ├── fixtures/               # Sample plan JSON files for testing
-│   └── test_rules.py
-├── docs/
-│   ├── STANDARDS_SCHEMA.md     # Standards file reference
-│   └── RISK_LEVELS.md
-└── examples/
-    ├── basic-workflow.yaml
-    └── advanced-workflow.yaml
+│           └── slack.py        # Block Kit reporter (webhook / bot token / thread-per-PR)
+└── tests/
+    ├── fixtures/               # Sample plan JSONs (violations, clean, standards)
+    ├── test_security_rules.py
+    ├── test_standards.py
+    ├── test_slack_reporter.py
+    ├── test_cost_estimator.py
+    └── test_drift_analyzer.py
 ```
 
 ---
@@ -226,14 +282,15 @@ terraform-ai-guardian/
 ## Roadmap
 
 - [x] GitHub Actions integration
-- [x] Security rule engine (IAM, SG, S3)
+- [x] Security rule engine (IAM, SG, S3, RDS, KMS, EC2)
 - [x] Blast radius assessment
 - [x] PR comment with risk level
-- [ ] Cost estimation via Infracost integration
-- [ ] Org standards custom rules
-- [ ] Slack notification support
+- [x] Cost estimation via Infracost integration (built-in estimator fallback)
+- [x] Org standards engine (`.tf-guardian.yml`: tags, instance types, regions, encryption, naming, module allowlists)
+- [x] Slack notification support (Block Kit, webhook + bot token, thread-per-PR, dry-run)
+- [x] OPA/Rego policy integration
+- [x] Drift detection (nightly multi-account scan + AI root-cause analysis)
 - [ ] GitLab CI support
-- [ ] OPA/Rego policy integration
 - [ ] Historical risk trend dashboard
 
 ---
