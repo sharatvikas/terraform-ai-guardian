@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 from guardian.rules.cost import (
     CostDelta,
@@ -9,6 +12,9 @@ from guardian.rules.cost import (
     estimate_plan_cost,
     format_cost_summary,
 )
+from guardian.rules.infracost import InfracostRunner
+
+FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def _resource(rtype: str, address: str, action: str = "create", **config) -> dict:
@@ -167,3 +173,80 @@ class TestCostSummaryFormat:
         )
         summary = format_cost_summary(delta)
         assert "-$200.00" in summary
+
+
+class TestBuiltinRunner:
+    """Exercise InfracostRunner's built-in (infracost-free) fallback path.
+
+    This is the code path that previously crashed with
+    `'CostDelta' object has no attribute 'additions'` and degraded every run
+    to `$0.00 (skipped)`.
+    """
+
+    def _runner(self, monkeypatch) -> InfracostRunner:
+        runner = InfracostRunner()
+        # Force the built-in path regardless of a locally installed infracost.
+        monkeypatch.setattr(runner, "_has_infracost", False, raising=False)
+        return runner
+
+    def test_builtin_produces_nonzero_delta_from_plan(self, monkeypatch):
+        """A plan with cost-relevant resources yields a real (non-zero) delta."""
+        runner = self._runner(monkeypatch)
+        result = runner.estimate(FIXTURES / "plan_clean.json")
+
+        assert result.source == "builtin"
+        # plan_clean.json creates an EC2 instance, an RDS instance and a VPC —
+        # the priceable ones must sum to a positive monthly delta.
+        assert result.diff_total_monthly_cost > 0
+        assert result.total_monthly_cost > 0
+        assert result.resources, "expected per-resource breakdown"
+        # Every breakdown row carries a real address + cost (proves the field
+        # mapping is correct, not the old missing `.additions`/`.monthly_delta`).
+        for r in result.resources:
+            assert r.name
+            assert r.monthly_cost >= 0
+            assert r.hourly_cost == pytest.approx(r.monthly_cost / 730, rel=1e-6)
+
+    def test_builtin_graceful_when_cost_undeterminable(self, monkeypatch, tmp_path):
+        """No priceable resources → 'skipped' (unknown), not a crash or fake $0."""
+        runner = self._runner(monkeypatch)
+
+        plan = {
+            "format_version": "1.2",
+            "terraform_version": "1.7.0",
+            "resource_changes": [
+                {
+                    "address": "aws_iam_role.app",
+                    "type": "aws_iam_role",
+                    "name": "app",
+                    "provider_name": "registry.terraform.io/hashicorp/aws",
+                    "change": {"actions": ["create"], "before": None, "after": {}},
+                },
+                {
+                    "address": "aws_lambda_function.worker",
+                    "type": "aws_lambda_function",
+                    "name": "worker",
+                    "provider_name": "registry.terraform.io/hashicorp/aws",
+                    "change": {"actions": ["create"], "before": None, "after": {}},
+                },
+            ],
+        }
+        plan_path = tmp_path / "unpriceable_plan.json"
+        plan_path.write_text(json.dumps(plan))
+
+        result = runner.estimate(plan_path)
+
+        assert result.source == "skipped"
+        assert result.diff_total_monthly_cost == 0.0
+        assert result.resources == []
+
+    def test_builtin_handles_unparseable_plan_gracefully(self, monkeypatch, tmp_path):
+        """A malformed plan file degrades to 'skipped' rather than raising."""
+        runner = self._runner(monkeypatch)
+        bad = tmp_path / "broken.json"
+        bad.write_text("{ not valid json")
+
+        result = runner.estimate(bad)
+
+        assert result.source == "skipped"
+        assert result.diff_total_monthly_cost == 0.0

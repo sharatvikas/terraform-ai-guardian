@@ -144,10 +144,20 @@ and **exits 0**. Same binary, same config, opposite outcome.
 
 | | Before | After | Delta |
 |---|---|---|---|
-| Monthly | $0.00 | $0.00 | **+$0.00/mo** |
-| Hourly  | $0.0000 | $0.0000 | — |
+| Monthly | $14.41 | $245.00 | **+$230.59/mo** |
+| Hourly  | $0.0197 | $0.3356 | — |
 
-*Source: skipped*
+*Source: builtin*
+
+<details><summary>Top resources by cost</summary>
+
+| Resource | Monthly |
+|---|---|
+| `aws_db_instance.reporting` | $148.00 |
+| `aws_instance.legacy` | $81.00 |
+| `aws_ebs_volume.scratch` | $16.00 |
+| `aws_db_instance.deprecated` | $14.41 |
+</details>
 
 ---
 *Analysis by [terraform-ai-guardian](https://github.com/sharatvikas/terraform-ai-guardian) using Claude API*
@@ -192,8 +202,8 @@ Posting review to Slack...
 
 ```
 standards-violations=13
-monthly-cost-delta=0.0
-cost-source=skipped
+monthly-cost-delta=230.59
+cost-source=builtin
 risk-level=HIGH
 critical-count=0
 warning-count=15
@@ -218,7 +228,7 @@ warning-count=15
         { "type": "mrkdwn", "text": "*Plan File*\n`tests/fixtures/plan_standards_violations.json`" },
         { "type": "mrkdwn", "text": "*Critical / High*\n0 / 12" },
         { "type": "mrkdwn", "text": "*Standards Violations*\n13" },
-        { "type": "mrkdwn", "text": "*Monthly Cost Δ*\n$+0.00 (skipped)" }
+        { "type": "mrkdwn", "text": "*Monthly Cost Δ*\n$+230.59 (builtin)" }
       ]
     },
     { "type": "divider" },
@@ -268,10 +278,18 @@ warning-count=15
 
 | | Before | After | Delta |
 |---|---|---|---|
-| Monthly | $0.00 | $0.00 | **+$0.00/mo** |
-| Hourly  | $0.0000 | $0.0000 | — |
+| Monthly | $0.00 | $358.74 | **+$358.74/mo** |
+| Hourly  | $0.0000 | $0.4914 | — |
 
-*Source: skipped*
+*Source: builtin*
+
+<details><summary>Top resources by cost</summary>
+
+| Resource | Monthly |
+|---|---|
+| `aws_db_instance.primary` | $294.00 |
+| `aws_instance.api` | $64.74 |
+</details>
 
 ---
 *Analysis by [terraform-ai-guardian](https://github.com/sharatvikas/terraform-ai-guardian) using Claude API*
@@ -295,8 +313,8 @@ Posting review to Slack...
 
 ```
 standards-violations=0
-monthly-cost-delta=0.0
-cost-source=skipped
+monthly-cost-delta=358.74
+cost-source=builtin
 risk-level=NONE
 critical-count=0
 warning-count=0
@@ -321,7 +339,7 @@ warning-count=0
         { "type": "mrkdwn", "text": "*Plan File*\n`tests/fixtures/plan_clean.json`" },
         { "type": "mrkdwn", "text": "*Critical / High*\n0 / 0" },
         { "type": "mrkdwn", "text": "*Standards Violations*\n0" },
-        { "type": "mrkdwn", "text": "*Monthly Cost Δ*\n$+0.00 (skipped)" }
+        { "type": "mrkdwn", "text": "*Monthly Cost Δ*\n$+358.74 (builtin)" }
       ]
     },
     { "type": "divider" },
@@ -356,10 +374,14 @@ warning-count=0
 - **LLM path skipped (offline):** with no `ANTHROPIC_API_KEY`, the "🤖 AI Deep
   Analysis" section is omitted. Everything shown is the deterministic rule-based
   path. Export `ANTHROPIC_API_KEY` to additionally exercise it (requires network).
-- **Cost shows `$0.00 (skipped)`:** the built-in estimator hit a pre-existing bug
-  (`'CostDelta' object has no attribute 'additions'`) and degraded to a no-op cost
-  section. `infracost` is also not installed. Cost is out of scope for this demo;
-  security + standards + the risk gate are unaffected and fully exercised.
+- **Cost is a built-in heuristic, not `infracost`:** `infracost` is not installed
+  here, so the offline built-in estimator runs (`Source: builtin`). It prices a
+  curated set of resource types (EC2, RDS, EBS, EKS, NAT, ALB, ElastiCache) with
+  hardcoded on-demand us-east-1 rates — good enough for a directional monthly
+  delta, but not authoritative. Resource types outside those tables aren't
+  priced, and if a plan contains no priceable resources cost is reported as
+  `skipped` (genuinely unknown) rather than a fake `$0`. Install `infracost` and
+  set `INFRACOST_API_KEY` for accurate, real-pricing numbers.
 - **OPA disabled:** the optional OPA/rego engine (`policies/terraform.rego`) needs
   the external `opa` binary, which isn't part of the offline rule-based path.
 - **PR comment / Slack are not delivered:** no `GITHUB_TOKEN` and dry-run Slack, by

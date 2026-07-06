@@ -31,6 +31,7 @@ log = logging.getLogger(__name__)
 
 INFRACOST_BIN = os.environ.get("INFRACOST_PATH", "infracost")
 COST_THRESHOLD = float(os.environ.get("GUARDIAN_COST_THRESHOLD", "0"))  # 0 = disabled
+_HOURS_PER_MONTH = 730
 
 
 @dataclass
@@ -210,38 +211,60 @@ class InfracostRunner:
         )
 
     def _run_builtin(self, plan_json_path: Path) -> InfracostResult:
-        """Fall back to the built-in approximate estimator."""
+        """Fall back to the built-in approximate estimator.
+
+        Maps the ``CostDelta`` produced by ``guardian.rules.cost`` onto the
+        infracost-shaped ``InfracostResult``:
+
+          * ``past_total_monthly_cost``  = cost of resources being removed
+          * ``total_monthly_cost``       = cost of resources being added/updated
+          * ``diff_total_monthly_cost``  = net monthly delta (added − removed)
+
+        If the plan contains no resources the built-in pricing tables know how
+        to price, cost is genuinely *unknown* rather than $0 — so we report
+        ``source="skipped"`` instead of fabricating a zero delta.
+        """
         from guardian.parser import parse_plan
         from guardian.rules.cost import changes_to_cost_inputs, estimate_plan_cost
 
         try:
             plan = parse_plan(plan_json_path)
             delta = estimate_plan_cost(changes_to_cost_inputs(plan.resource_changes))
-
-            return InfracostResult(
-                total_monthly_cost=max(0.0, delta.net_monthly_delta),
-                total_hourly_cost=max(0.0, delta.net_monthly_delta) / 730,
-                past_total_monthly_cost=0.0,
-                diff_total_monthly_cost=delta.net_monthly_delta,
-                resources=[
-                    InfracostResource(
-                        name=r.resource_address,
-                        resource_type=r.resource_address.split(".")[0],
-                        monthly_cost=r.monthly_delta,
-                        hourly_cost=r.monthly_delta / 730,
-                    )
-                    for r in (delta.additions + delta.modifications)
-                    if hasattr(r, "resource_address")
-                ],
-                source="builtin",
-            )
         except Exception as exc:
             log.warning("built-in cost estimation failed: %s", exc)
-            return InfracostResult(
-                total_monthly_cost=0.0,
-                total_hourly_cost=0.0,
-                past_total_monthly_cost=0.0,
-                diff_total_monthly_cost=0.0,
-                resources=[],
-                source="skipped",
+            return self._skipped_result()
+
+        # Nothing priceable → we cannot determine a cost. Report it honestly.
+        if not delta.estimates:
+            return self._skipped_result()
+
+        resources = [
+            InfracostResource(
+                name=e.resource_address,
+                resource_type=e.resource_type,
+                monthly_cost=e.monthly_cost_usd,
+                hourly_cost=e.monthly_cost_usd / _HOURS_PER_MONTH,
             )
+            for e in delta.estimates
+        ]
+
+        return InfracostResult(
+            total_monthly_cost=delta.new_monthly_cost,
+            total_hourly_cost=delta.new_monthly_cost / _HOURS_PER_MONTH,
+            past_total_monthly_cost=delta.removed_monthly_cost,
+            diff_total_monthly_cost=delta.net_monthly_delta,
+            resources=resources,
+            source="builtin",
+        )
+
+    @staticmethod
+    def _skipped_result() -> InfracostResult:
+        """A neutral, non-crashing result meaning 'cost could not be determined'."""
+        return InfracostResult(
+            total_monthly_cost=0.0,
+            total_hourly_cost=0.0,
+            past_total_monthly_cost=0.0,
+            diff_total_monthly_cost=0.0,
+            resources=[],
+            source="skipped",
+        )
