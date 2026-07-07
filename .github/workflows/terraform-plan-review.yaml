@@ -106,14 +106,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Detect Terraform config
+        id: detect
+        working-directory: ${{ inputs.working-directory || '.' }}
+        run: |
+          # A bare workflow_dispatch defaults working-directory to the repo
+          # root, which may have no Terraform. Real callers pass a real dir.
+          if ls ./*.tf >/dev/null 2>&1; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No Terraform configuration in '${{ inputs.working-directory || '.' }}' — skipping plan."
+          fi
+
       - name: Setup Terraform
+        if: steps.detect.outputs.present == 'true'
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ inputs.terraform-version || '1.9.0' }}
           terraform_wrapper: false
 
       - name: Configure AWS credentials (OIDC)
-        if: ${{ env.AWS_ROLE_ARN != '' }}
+        if: ${{ steps.detect.outputs.present == 'true' && env.AWS_ROLE_ARN != '' }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
@@ -121,12 +135,14 @@ jobs:
           role-session-name: terraform-ai-guardian-plan
 
       - name: Terraform Init
+        if: steps.detect.outputs.present == 'true'
         working-directory: ${{ inputs.working-directory || '.' }}
         run: terraform init -input=false -no-color
         env:
           TF_CLI_ARGS_init: "-upgrade=false"
 
       - name: Select workspace
+        if: steps.detect.outputs.present == 'true'
         working-directory: ${{ inputs.working-directory || '.' }}
         run: |
           workspace="${{ inputs.workspace || 'default' }}"
@@ -136,6 +152,7 @@ jobs:
 
       - name: Terraform Plan
         id: plan
+        if: steps.detect.outputs.present == 'true'
         working-directory: ${{ inputs.working-directory || '.' }}
         run: |
           terraform plan \
@@ -159,6 +176,7 @@ jobs:
 
       - name: Check plan summary
         id: check
+        if: steps.detect.outputs.present == 'true'
         working-directory: ${{ inputs.working-directory || '.' }}
         run: |
           # Count resource changes from the JSON plan
@@ -179,6 +197,7 @@ jobs:
           fi
 
       - name: Upload plan artifact
+        if: steps.detect.outputs.present == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: tfplan-json
