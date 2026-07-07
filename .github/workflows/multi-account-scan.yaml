@@ -28,9 +28,32 @@ env:
   TF_VERSION: "1.7.5"
 
 jobs:
+  # ─── Preflight: only run when org AWS credentials are configured ───────────
+  # The scan assumes a cross-account org-reader role. Without that secret the
+  # AWS auth step can only fail, so gate the whole pipeline on its presence
+  # rather than letting the nightly schedule fail on every run.
+  preflight:
+    name: Check credentials
+    runs-on: ubuntu-latest
+    outputs:
+      enabled: ${{ steps.check.outputs.enabled }}
+    env:
+      AWS_ORG_READER_ROLE_ARN: ${{ secrets.AWS_ORG_READER_ROLE_ARN }}
+    steps:
+      - id: check
+        run: |
+          if [ -n "$AWS_ORG_READER_ROLE_ARN" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::AWS_ORG_READER_ROLE_ARN not set — skipping multi-account scan (credential-gated by design)."
+          fi
+
   # ─── Discover accounts from AWS Organizations ─────────────────────────────
   discover-accounts:
     name: Discover AWS accounts
+    needs: preflight
+    if: needs.preflight.outputs.enabled == 'true'
     runs-on: ubuntu-latest
     outputs:
       accounts: ${{ steps.list.outputs.accounts }}
@@ -154,9 +177,9 @@ jobs:
   # ─── Aggregate and report ─────────────────────────────────────────────────
   aggregate-report:
     name: Aggregate security report
-    needs: [discover-accounts, scan-account]
+    needs: [preflight, discover-accounts, scan-account]
     runs-on: ubuntu-latest
-    if: always()
+    if: always() && needs.preflight.outputs.enabled == 'true'
     permissions:
       issues: write
       id-token: write
