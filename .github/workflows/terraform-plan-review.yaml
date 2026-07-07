@@ -93,6 +93,10 @@ jobs:
   plan:
     name: Terraform Plan
     runs-on: ubuntu-latest
+    # The `secrets` context is not allowed in step-level `if:`, so surface the
+    # role ARN as an env var here and gate the AWS-auth step on it.
+    env:
+      AWS_ROLE_ARN: ${{ secrets.aws-role-arn }}
     outputs:
       plan-file: ${{ steps.plan.outputs.plan-file }}
       has-changes: ${{ steps.check.outputs.has-changes }}
@@ -109,10 +113,10 @@ jobs:
           terraform_wrapper: false
 
       - name: Configure AWS credentials (OIDC)
-        if: ${{ secrets.aws-role-arn != '' }}
+        if: ${{ env.AWS_ROLE_ARN != '' }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.aws-role-arn }}
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
           aws-region: ${{ inputs.aws-region || 'us-east-1' }}
           role-session-name: terraform-ai-guardian-plan
 

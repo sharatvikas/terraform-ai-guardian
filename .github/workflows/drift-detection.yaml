@@ -107,6 +107,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Compute module slug
+        id: slug
+        env:
+          MODULE: ${{ matrix.module }}
+        run: |
+          # GitHub Actions expressions have no replace(); sanitise here instead.
+          SLUG=$(echo "$MODULE" | sed 's|[./]|-|g; s|^-*||')
+          [ -z "$SLUG" ] && SLUG=root
+          echo "slug=$SLUG" >> "$GITHUB_OUTPUT"
+
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
         with:
@@ -163,7 +173,7 @@ jobs:
         if: steps.plan.outputs.drift_detected == 'true' || steps.plan.outputs.drift_detected == 'error'
         uses: actions/upload-artifact@v4
         with:
-          name: drift-${{ matrix.module == '.' && 'root' || matrix.module | replace('/', '-') }}
+          name: drift-${{ steps.slug.outputs.slug }}
           path: |
             ${{ matrix.module }}/plan.txt
             ${{ matrix.module }}/drift.json
