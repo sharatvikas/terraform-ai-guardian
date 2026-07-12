@@ -97,6 +97,18 @@ intentional and the workload justifies it.
 
 ---
 
+## Try it locally
+
+A one-command, fully offline demo runs the **real** reviewer (`guardian.main`) against the repo's fixture plans and `.tf-guardian.yml`, in Slack dry-run mode — no cloud, no API key, no network:
+
+```bash
+./demo/run_demo.sh
+```
+
+It reviews a violating plan (HIGH risk, 13 standards violations → exit 1) and a clean plan (NONE risk → exit 0), printing the rendered PR-comment markdown, the structured standards violations, the risk-gate decision, and the Slack Block Kit dry-run payload for each. See [`demo/OUTPUT.md`](demo/OUTPUT.md) for a captured real run and [`demo/README.md`](demo/README.md) for details.
+
+---
+
 ## Integration
 
 ### GitHub Actions
