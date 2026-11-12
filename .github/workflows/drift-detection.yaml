@@ -45,8 +45,8 @@ on:
         default: LOW
 
 env:
-  TF_VERSION: "1.7.5"
-  PYTHON_VERSION: "3.12"
+  TF_VERSION: "1.17.2"
+  PYTHON_VERSION: "3.15"
 
 jobs:
 
@@ -60,7 +60,7 @@ jobs:
       module_count: ${{ steps.discover.outputs.module_count }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Discover root modules
         id: discover
@@ -105,7 +105,7 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Compute module slug
         id: slug
@@ -118,13 +118,13 @@ jobs:
           echo "slug=$SLUG" >> "$GITHUB_OUTPUT"
 
       - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_DRIFT_ROLE_ARN }}
           aws-region: us-east-1
@@ -171,7 +171,7 @@ jobs:
 
       - name: Upload drift artifacts
         if: steps.plan.outputs.drift_detected == 'true' || steps.plan.outputs.drift_detected == 'error'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: drift-${{ steps.slug.outputs.slug }}
           path: |
@@ -204,18 +204,18 @@ jobs:
       issues: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install guardian
-        run: pip install -e src/ anthropic
+        run: pip install .
 
       - name: Download all drift artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: drift-*
           path: /tmp/drift-artifacts
@@ -272,7 +272,7 @@ jobs:
             >> $GITHUB_STEP_SUMMARY
 
       - name: Upload drift report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: drift-analysis-report
           path: /tmp/drift-report.json
