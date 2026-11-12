@@ -6,8 +6,11 @@ import os
 
 import anthropic
 
+from guardian.ai.response import answer_text
 from guardian.parser import TerraformPlan
 from guardian.rules.security import Finding
+
+MODEL = "claude-opus-5-5"
 
 _SYSTEM_PROMPT = """You are a senior Site Reliability Engineer and AWS security architect reviewing
 a Terraform plan before it is applied to production infrastructure.
@@ -34,7 +37,7 @@ If the plan looks clean, say so clearly. Do not manufacture issues."""
 def analyze_with_ai(
     plan: TerraformPlan,
     existing_findings: list[Finding],
-    max_tokens: int = 4096,
+    max_tokens: int = 16000,
     standards_context: str = "",
 ) -> str:
     """Send plan summary to Claude for deep analysis beyond rule-based checks."""
@@ -56,14 +59,20 @@ AUTOMATED RULE FINDINGS:
 
     user_message += "\nProvide your additional analysis:"
 
-    response = client.messages.create(
-        model="claude-opus-4-6",
+    # Opus 5.5 always thinks; effort sets how much (its default is "medium", so a
+    # production review asks for "high"). A safety-classifier decline is retried
+    # server-side on Anthropic's recommended fallback model.
+    response = client.beta.messages.create(
+        model=MODEL,
         max_tokens=max_tokens,
         system=_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_message}],
+        output_config={"effort": "high"},
+        betas=["server-side-fallback-2026-07-01"],
+        fallbacks="default",
     )
 
-    return response.content[0].text
+    return answer_text(response)
 
 
 def _build_plan_summary(plan: TerraformPlan, findings: list[Finding]) -> str:

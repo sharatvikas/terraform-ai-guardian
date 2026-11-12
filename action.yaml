@@ -35,9 +35,9 @@ inputs:
     default: ''
 
   max-tokens:
-    description: 'Maximum tokens for Claude analysis (cost control)'
+    description: 'Maximum output tokens for the Claude review, thinking included (cost control)'
     required: false
-    default: '4096'
+    default: '16000'
 
   post-comment:
     description: 'Post analysis as PR comment (true/false)'

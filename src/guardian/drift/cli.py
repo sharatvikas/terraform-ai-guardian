@@ -18,12 +18,16 @@ import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 
+from guardian.ai.response import answer_text
 from guardian.drift.analyzer import (
     SEVERITY_RANK,
     DriftFinding,
     DriftReport,
     load_artifacts,
 )
+
+# Drift enrichment and summaries are short, high-volume jobs: the current Haiku.
+DRIFT_MODEL = "claude-haiku-5-5"
 
 
 def cmd_analyze(args) -> None:
@@ -318,12 +322,15 @@ Findings:
 {findings_text}"""
 
     try:
+        # Haiku 5.5 thinks by default and thinking counts toward max_tokens, so the
+        # cap leaves room for it; low effort keeps this short, structured job cheap.
         response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=1000,
+            model=DRIFT_MODEL,
+            max_tokens=8000,
+            output_config={"effort": "low"},
             messages=[{"role": "user", "content": prompt}],
         )
-        text = response.content[0].text
+        text = answer_text(response)
 
         # Parse responses back to findings
         for i, finding in enumerate(high_crit[:10]):
@@ -357,8 +364,9 @@ def _generate_summary(report: DriftReport, api_key: str) -> str:
 
     try:
         response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=200,
+            model=DRIFT_MODEL,
+            max_tokens=2048,
+            output_config={"effort": "low"},
             messages=[{
                 "role": "user",
                 "content": (
@@ -367,7 +375,7 @@ def _generate_summary(report: DriftReport, api_key: str) -> str:
                 ),
             }],
         )
-        return response.content[0].text.strip()
+        return answer_text(response)
     except Exception:
         return ""
 
