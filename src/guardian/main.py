@@ -24,7 +24,7 @@ def main() -> int:
     plan_file = os.environ.get("INPUT_PLAN-FILE", os.environ.get("PLAN_FILE", "tfplan.json"))
     fail_on_risk_str = os.environ.get("INPUT_FAIL-ON-RISK", os.environ.get("FAIL_ON_RISK", "HIGH")).upper()
     standards_file = os.environ.get("INPUT_STANDARDS-FILE", os.environ.get("STANDARDS_FILE", ""))
-    max_tokens = int(os.environ.get("INPUT_MAX-TOKENS", os.environ.get("MAX_TOKENS", "2000")))
+    max_tokens = int(os.environ.get("INPUT_MAX-TOKENS", os.environ.get("MAX_TOKENS", "16000")))
 
     plan_path = Path(plan_file)
     if not plan_path.exists():
