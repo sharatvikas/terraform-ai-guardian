@@ -9,7 +9,6 @@ import anthropic
 from guardian.parser import TerraformPlan
 from guardian.rules.security import Finding
 
-
 _SYSTEM_PROMPT = """You are a senior Site Reliability Engineer and AWS security architect reviewing
 a Terraform plan before it is applied to production infrastructure.
 

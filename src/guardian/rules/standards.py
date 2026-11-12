@@ -48,7 +48,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import yaml
 
@@ -164,7 +164,7 @@ class ConditionRule:
     })
 
     @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> "ConditionRule":
+    def from_dict(cls, raw: dict[str, Any]) -> ConditionRule:
         if not isinstance(raw, dict) or "id" not in raw:
             raise StandardsError(f"standards rule missing required 'id' key: {raw!r}")
         rule_id = str(raw["id"])
@@ -268,7 +268,7 @@ class StandardsConfig:
     severities: dict[str, RiskLevel] = field(default_factory=dict)
     source_file: str = ""
 
-    _DEFAULT_SEVERITIES = {
+    _DEFAULT_SEVERITIES: ClassVar[dict[str, RiskLevel]] = {
         "required_tags": RiskLevel.HIGH,
         "tag_values": RiskLevel.MEDIUM,
         "allowed_instance_types": RiskLevel.MEDIUM,

@@ -29,7 +29,6 @@ from typing import Any
 
 import httpx
 
-
 OPA_URL = os.environ.get("OPA_URL", "")
 OPA_BUNDLE_PATH = os.environ.get("OPA_BUNDLE_PATH", "policies")
 OPA_QUERY = os.environ.get("OPA_QUERY", "data.terraform.deny")
@@ -203,7 +202,7 @@ class OPAEvaluator:
                 "--format", "json",
                 self.query,
             ]
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60, check=False)
             if proc.returncode not in (0, 2):
                 result.error = f"opa eval failed: {proc.stderr}"
                 return result

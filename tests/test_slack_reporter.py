@@ -37,17 +37,17 @@ def make_violation(rule_id="STD-TAG-001", severity=RiskLevel.HIGH):
 
 
 def make_summary(**overrides) -> ReviewSummary:
-    defaults = dict(
-        overall_risk=RiskLevel.HIGH,
-        findings=[make_finding()],
-        violations=[make_violation()],
-        plan_file="tfplan.json",
-        pr_url="https://github.com/org/repo/pull/42",
-        pr_key="org/repo#42",
-        ai_summary="Looks risky.",
-        cost_delta_monthly=123.45,
-        cost_source="infracost",
-    )
+    defaults = {
+        "overall_risk": RiskLevel.HIGH,
+        "findings": [make_finding()],
+        "violations": [make_violation()],
+        "plan_file": "tfplan.json",
+        "pr_url": "https://github.com/org/repo/pull/42",
+        "pr_key": "org/repo#42",
+        "ai_summary": "Looks risky.",
+        "cost_delta_monthly": 123.45,
+        "cost_source": "infracost",
+    }
     defaults.update(overrides)
     return ReviewSummary(**defaults)
 

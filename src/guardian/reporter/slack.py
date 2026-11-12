@@ -19,7 +19,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -58,7 +58,7 @@ class SlackConfig:
     thread_per_pr: bool = True
 
     @classmethod
-    def from_env(cls) -> "SlackConfig":
+    def from_env(cls) -> SlackConfig:
         return cls(
             webhook_url=os.environ.get("SLACK_WEBHOOK_URL", ""),
             bot_token=os.environ.get("SLACK_BOT_TOKEN", ""),
@@ -78,7 +78,7 @@ class ReviewSummary:
 
     overall_risk: RiskLevel
     findings: list[Finding] = field(default_factory=list)
-    violations: list["StandardViolation"] = field(default_factory=list)
+    violations: list[StandardViolation] = field(default_factory=list)
     plan_file: str = ""
     pr_url: str = ""
     pr_key: str = ""          # stable identity for threading, e.g. "org/repo#42"
@@ -348,7 +348,7 @@ def post_analysis_to_slack(
     plan_file: str,
     pr_url: str | None = None,
     webhook_url: str | None = None,
-    violations: list["StandardViolation"] | None = None,
+    violations: list[StandardViolation] | None = None,
     cost_delta_monthly: float | None = None,
     cost_source: str = "",
     pr_key: str = "",

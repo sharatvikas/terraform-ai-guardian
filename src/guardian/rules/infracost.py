@@ -167,6 +167,7 @@ class InfracostRunner:
             text=True,
             timeout=120,
             env=env,
+            check=False,
         )
 
         if result.returncode != 0:

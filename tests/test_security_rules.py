@@ -1,7 +1,8 @@
 """Tests for the security rule engine and plan parser."""
 
-import pytest
 from pathlib import Path
+
+import pytest
 
 from guardian.parser import parse_plan
 from guardian.rules.security import RiskLevel, run_security_rules
