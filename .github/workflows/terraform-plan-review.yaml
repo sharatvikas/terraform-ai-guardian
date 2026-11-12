@@ -32,7 +32,7 @@ on:
         description: "Terraform version to use"
         type: string
         required: false
-        default: "1.9.0"
+        default: "1.17.2"
       aws-region:
         description: "AWS region for provider"
         type: string
@@ -80,7 +80,7 @@ on:
         default: "."
         required: false
       terraform-version:
-        default: "1.9.0"
+        default: "1.17.2"
         required: false
 
 permissions:
@@ -104,7 +104,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Detect Terraform config
         id: detect
@@ -121,14 +121,14 @@ jobs:
 
       - name: Setup Terraform
         if: steps.detect.outputs.present == 'true'
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@v4
         with:
-          terraform_version: ${{ inputs.terraform-version || '1.9.0' }}
+          terraform_version: ${{ inputs.terraform-version || '1.17.2' }}
           terraform_wrapper: false
 
       - name: Configure AWS credentials (OIDC)
         if: ${{ steps.detect.outputs.present == 'true' && env.AWS_ROLE_ARN != '' }}
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
           aws-region: ${{ inputs.aws-region || 'us-east-1' }}
@@ -198,7 +198,7 @@ jobs:
 
       - name: Upload plan artifact
         if: steps.detect.outputs.present == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tfplan-json
           path: ${{ inputs.working-directory || '.' }}/tfplan.json
@@ -213,10 +213,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Download plan artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: tfplan-json
           path: .

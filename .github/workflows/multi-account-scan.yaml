@@ -25,7 +25,7 @@ on:
 
 env:
   GUARDIAN_VERSION: main
-  TF_VERSION: "1.7.5"
+  TF_VERSION: "1.17.2"
 
 jobs:
   # ─── Preflight: only run when org AWS credentials are configured ───────────
@@ -62,7 +62,7 @@ jobs:
       id-token: write
     steps:
       - name: Configure AWS credentials (org management account)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_ORG_READER_ROLE_ARN }}
           aws-region: us-east-1
@@ -120,16 +120,16 @@ jobs:
         account: ${{ fromJson(needs.discover-accounts.outputs.accounts) }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Assume cross-account role
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::${{ matrix.account.id }}:role/TerraformGuardianScanner
           aws-region: us-east-1
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: ${{ env.TF_VERSION }}
           cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
@@ -170,7 +170,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload scan results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: scan-results-${{ matrix.account.id }}
           path: |
@@ -191,7 +191,7 @@ jobs:
           EOF
 
       - name: Upload account summary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: summary-${{ matrix.account.id }}
           path: account-summary-${{ matrix.account.id }}.json
@@ -208,11 +208,11 @@ jobs:
       id-token: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download all summaries
         if: needs.discover-accounts.outputs.count != '0'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: summary-*
           merge-multiple: true
