@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-
 from guardian.drift.analyzer import (
     DriftFinding,
     DriftReport,
-    parse_plan_json,
     _classify_severity,
     _normalize_action,
+    parse_plan_json,
 )
-
 
 # ─── Fixtures ─────────────────────────────────────────────────────────────────
 

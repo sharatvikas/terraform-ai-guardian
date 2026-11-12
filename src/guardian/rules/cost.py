@@ -8,7 +8,7 @@ This module is intentionally self-contained with no external dependencies.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover
     from guardian.parser import ResourceChange
@@ -74,7 +74,7 @@ class CostDelta:
     warnings: list[str]
 
 
-def changes_to_cost_inputs(changes: list["ResourceChange"]) -> list[dict[str, Any]]:
+def changes_to_cost_inputs(changes: list[ResourceChange]) -> list[dict[str, Any]]:
     """Adapt parsed ResourceChange objects to the dict shape estimate_plan_cost expects."""
     inputs: list[dict[str, Any]] = []
     for c in changes:

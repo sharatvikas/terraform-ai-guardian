@@ -17,7 +17,7 @@ class RiskLevel(str, Enum):
     LOW = "LOW"
     NONE = "NONE"
 
-    def __gt__(self, other: "RiskLevel") -> bool:
+    def __gt__(self, other: RiskLevel) -> bool:
         order = [RiskLevel.NONE, RiskLevel.LOW, RiskLevel.MEDIUM, RiskLevel.HIGH, RiskLevel.CRITICAL]
         return order.index(self) > order.index(other)
 

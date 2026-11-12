@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import os
+
 import httpx
 
 from guardian.rules.security import Finding, RiskLevel
-
 
 _RISK_EMOJI = {
     RiskLevel.CRITICAL: "🔴",
@@ -35,8 +35,10 @@ def build_pr_comment(
         _COMMENT_HEADER,
         f"## {emoji} Terraform AI Guardian — Risk: **{overall_risk.name}**",
         "",
-        f"**Plan file:** `{plan_file}`  |  "
-        f"**Issues:** {len(criticals)} critical, {len(highs)} high, {len(mediums)} medium",
+        (
+            f"**Plan file:** `{plan_file}`  |  "
+            f"**Issues:** {len(criticals)} critical, {len(highs)} high, {len(mediums)} medium"
+        ),
         "",
         "---",
     ]
@@ -70,8 +72,10 @@ def build_pr_comment(
     lines.extend([
         "",
         "---",
-        "*Analysis by [terraform-ai-guardian](https://github.com/sharatvikas/terraform-ai-guardian) "
-        "using Claude API*",
+        (
+            "*Analysis by [terraform-ai-guardian](https://github.com/sharatvikas/terraform-ai-guardian) "
+            "using Claude API*"
+        ),
     ])
 
     return "\n".join(lines)

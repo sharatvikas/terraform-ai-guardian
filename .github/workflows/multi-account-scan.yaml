@@ -57,6 +57,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       accounts: ${{ steps.list.outputs.accounts }}
+      count: ${{ steps.list.outputs.count }}
     permissions:
       id-token: write
     steps:
@@ -69,24 +70,46 @@ jobs:
       - name: List active AWS accounts
         id: list
         run: |
+          set -o pipefail
+
           if [ -n "${{ inputs.accounts }}" ]; then
             # Manual override — use provided account list
             ACCOUNT_JSON=$(echo "${{ inputs.accounts }}" | tr ',' '\n' | \
               jq -R -s 'split("\n") | map(select(length > 0)) | map({"id": ., "name": .})' )
           else
-            # Discover from AWS Organizations
-            ACCOUNT_JSON=$(aws organizations list-accounts \
-              --query 'Accounts[?Status==`ACTIVE`].[Id,Name]' \
-              --output text | awk '{print "{\"id\":\""$1"\",\"name\":\""$2"\"}"}' | \
-              jq -s '.')
+            # Discover from AWS Organizations. A standalone account (one that is
+            # not the management account of an Organization) answers with
+            # AWSOrganizationsNotInUseException / AccessDenied — that is a valid
+            # "nothing to scan" answer, not a pipeline failure, so tolerate it
+            # and fall through to the empty-list handling below.
+            if ! RAW=$(aws organizations list-accounts \
+                  --query 'Accounts[?Status==`ACTIVE`].[Id,Name]' \
+                  --output text 2>&1); then
+              echo "::notice::aws organizations list-accounts failed — treating as zero accounts. Detail: ${RAW}"
+              RAW=""
+            fi
+            ACCOUNT_JSON=$(printf '%s' "${RAW}" \
+              | awk 'NF {print "{\"id\":\""$1"\",\"name\":\""$2"\"}"}' \
+              | jq -s '.')
           fi
+
+          COUNT=$(echo "$ACCOUNT_JSON" | jq length)
           echo "accounts=${ACCOUNT_JSON}" >> "$GITHUB_OUTPUT"
-          echo "Discovered $(echo "$ACCOUNT_JSON" | jq length) accounts"
+          echo "count=${COUNT}" >> "$GITHUB_OUTPUT"
+          echo "Discovered ${COUNT} accounts"
+
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::notice::No active AWS accounts discovered — there is nothing to scan. The per-account scan job will be skipped."
+          fi
 
   # ─── Scan each account in parallel ───────────────────────────────────────
   scan-account:
     name: Scan ${{ matrix.account.name }} (${{ matrix.account.id }})
     needs: discover-accounts
+    # A matrix expanded from an empty array aborts the *run* ("Matrix vector
+    # 'account' does not contain any values") rather than skipping the job, so
+    # the empty case has to be excluded before expansion happens.
+    if: needs.discover-accounts.outputs.count != '0'
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -188,13 +211,21 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Download all summaries
+        if: needs.discover-accounts.outputs.count != '0'
         uses: actions/download-artifact@v4
         with:
           pattern: summary-*
           merge-multiple: true
 
+      - name: Report nothing to scan
+        if: needs.discover-accounts.outputs.count == '0'
+        run: |
+          echo "No active AWS accounts were discovered, so no accounts were scanned."
+          echo "This is expected on a standalone AWS account (no AWS Organization)."
+
       - name: Build aggregate report
         id: report
+        if: needs.discover-accounts.outputs.count != '0'
         run: |
           # Merge all account summaries
           SUMMARIES=$(cat account-summary-*.json 2>/dev/null | jq -s '.')
@@ -249,7 +280,7 @@ jobs:
             --body "$REPORT"
 
       - name: Post Slack report
-        if: env.SLACK_WEBHOOK_URL != ''
+        if: needs.discover-accounts.outputs.count != '0' && env.SLACK_WEBHOOK_URL != ''
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |

@@ -67,6 +67,11 @@ inputs:
     required: false
     default: 'false'
 
+  pr-number:
+    description: 'Pull request number to comment on; defaults to the PR that triggered the run'
+    required: false
+    default: ${{ github.event.pull_request.number }}
+
 outputs:
   risk-level:
     description: 'Detected risk level: CRITICAL, HIGH, MEDIUM, LOW, or NONE'
@@ -96,6 +101,6 @@ runs:
     SLACK_BOT_TOKEN: ${{ inputs.slack-bot-token }}
     SLACK_CHANNEL: ${{ inputs.slack-channel }}
     SLACK_DRY_RUN: ${{ inputs.slack-dry-run }}
-    GITHUB_REPOSITORY: ${{ github.repository }}
-    GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
-    GITHUB_SHA: ${{ github.sha }}
+    # The runner already passes GITHUB_REPOSITORY and GITHUB_SHA into the container; runs.env cannot read the
+    # github context, so the PR number comes in through an input whose default can.
+    GITHUB_PR_NUMBER: ${{ inputs.pr-number }}

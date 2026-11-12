@@ -21,7 +21,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-
 # ─── Risk Classification ──────────────────────────────────────────────────────
 
 SEVERITY_RANK = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1}
@@ -292,9 +291,7 @@ def _matches_value(actual: Any, expected: str) -> bool:
     s = str(actual).lower()
     if expected.lower() in s:
         return True
-    if isinstance(actual, list) and expected in actual:
-        return True
-    return False
+    return isinstance(actual, list) and expected in actual
 
 
 # ─── Artifact Loader ──────────────────────────────────────────────────────────

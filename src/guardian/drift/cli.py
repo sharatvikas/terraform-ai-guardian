@@ -9,19 +9,19 @@ Usage (invoked via `python -m guardian.drift`):
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
+import re
 import sys
 import urllib.request
-import argparse
-import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from guardian.drift.analyzer import (
+    SEVERITY_RANK,
     DriftFinding,
     DriftReport,
-    SEVERITY_RANK,
     load_artifacts,
 )
 
@@ -36,7 +36,7 @@ def cmd_analyze(args) -> None:
     findings_by_module = load_artifacts(artifacts_dir)
 
     all_findings: list[DriftFinding] = []
-    for module, findings in findings_by_module.items():
+    for findings in findings_by_module.values():
         for f in findings:
             if SEVERITY_RANK.get(f.severity, 0) >= min_rank:
                 all_findings.append(f)
@@ -51,7 +51,7 @@ def cmd_analyze(args) -> None:
         modules_scanned=_discover_all_modules(artifacts_dir),
         modules_with_drift=modules_with_drift,
         findings=all_findings,
-        scan_timestamp=datetime.now(timezone.utc).isoformat(),
+        scan_timestamp=datetime.now(UTC).isoformat(),
     )
 
     if api_key and all_findings:

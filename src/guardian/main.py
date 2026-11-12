@@ -138,7 +138,12 @@ def main() -> int:
     comment = build_pr_comment(overall_risk, findings, ai_summary, plan_file, cost_summary=cost_summary)
 
     if os.environ.get("INPUT_GITHUB-TOKEN") or os.environ.get("GITHUB_TOKEN"):
-        post_pr_comment(comment)
+        # A comment that cannot be posted (e.g. a token without pull-requests: write) must not lose
+        # the review: the outputs and step summary below still carry it.
+        try:
+            post_pr_comment(comment)
+        except Exception as e:
+            print(f"::warning::Could not post the PR comment: {e}")
 
     slack_config = SlackConfig.from_env()
     if slack_config.enabled or slack_config.dry_run:
